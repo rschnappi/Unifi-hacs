@@ -32,7 +32,7 @@ async def async_setup_entry(
                 if group.field in obj and group.filter(obj):
                     yield ResourceSwitch(coordinator, group, obj_id)
         for mac, dev in data.devices.items():
-            if "led_override" in dev:
+            if "led_override" in dev or dev.get("type") in ("uap", "usw"):
                 yield LedSwitch(coordinator, mac)
             yield LocateSwitch(coordinator, mac)
             for port in dev.get("port_table", []):
