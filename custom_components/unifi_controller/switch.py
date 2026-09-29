@@ -1,4 +1,4 @@
-"""Schalter: alle Config-Objekte (WLAN, Netze, VPN, FW …), Geräte, Clients."""
+"""Schalter: alle Config-Objekte (WLAN, Netze, VPN, FW …), Länder-Blocking, Geräte, Clients."""
 from __future__ import annotations
 
 from typing import Any
@@ -13,6 +13,7 @@ from .api import UniFiApiError
 from .const import CONF_CLIENT_SWITCHES, CONF_SWITCH_GROUPS
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
+from .region import async_set_geo, country_names, geo_setting, geo_state
 from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS, SwitchGroup, object_name
 
 
@@ -31,6 +32,8 @@ async def async_setup_entry(
             for obj_id, obj in data.config.get(group.dataset, {}).items():
                 if group.field in obj and group.filter(obj):
                     yield ResourceSwitch(coordinator, group, obj_id)
+        if geo_setting(data) is not None:
+            yield RegionSwitch(coordinator)
         for mac, dev in data.devices.items():
             if "led_override" in dev or dev.get("type") in ("uap", "usw"):
                 yield LedSwitch(coordinator, mac)
@@ -82,6 +85,35 @@ class ResourceSwitch(ControllerEntity, SwitchEntity):
             await self.coordinator.async_update_object(
                 self._group.dataset, self._obj, {self._group.field: value}
             )
+        except UniFiApiError as err:
+            raise HomeAssistantError(str(err)) from err
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set(False)
+
+
+# ------------------------------------------------------------ Länder-Blocking
+class RegionSwitch(ControllerEntity, SwitchEntity):
+    _attr_icon = "mdi:earth-off"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "region_blocking", "Länder-Blocking")
+
+    @property
+    def is_on(self) -> bool:
+        return geo_state(geo_setting(self.coordinator.data))["enabled"]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        st = geo_state(geo_setting(self.coordinator.data))
+        return {**st, "names": country_names(st["countries"])}
+
+    async def _set(self, value: bool) -> None:
+        try:
+            await async_set_geo(self.coordinator, enabled=value)
         except UniFiApiError as err:
             raise HomeAssistantError(str(err)) from err
 
