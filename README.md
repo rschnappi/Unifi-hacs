@@ -34,7 +34,8 @@ Neue Objekte (Policy angelegt, VLAN dazu, neuer AP …) erscheinen automatisch, 
 
 **HACS:** HACS → ⋮ → *Benutzerdefinierte Repositories* → `https://github.com/rschnappi/Unifi-hacs`,
 Kategorie *Integration* → installieren → HA neu starten.
-**Manuell:** `custom_components/unifi_controller` nach `/config/custom_components/` kopieren, neu starten.
+**Manuell:** `unifi_controller.zip` aus dem neuesten [Release](https://github.com/rschnappi/Unifi-hacs/releases/latest)
+nach `/config/custom_components/unifi_controller/` entpacken, neu starten.
 
 ### API-Key erstellen
 
@@ -199,6 +200,18 @@ Portweiterleitungen, QoS, VPN, WLANs, LEDs). Umstieg:
 2. Automationen, Skripte und Dashboards auf die neuen Entities umstellen
 3. UniFi Network Rules deaktivieren, ein paar Tage beobachten, dann entfernen
 
+## Releases
+
+Ein neuer Release braucht **nur einen Tag** – die Version in `manifest.json` muss nicht angepasst werden:
+
+```bash
+git tag v0.4.0 && git push --tags
+```
+
+oder auf GitHub *Releases → Draft a new release → neuen Tag eintippen → Publish*.
+Der Workflow schreibt die Version aus dem Tag in `manifest.json`, baut `unifi_controller.zip`
+(das installiert HACS), und erzeugt die Release-Notes aus den Commit-Nachrichten seit dem letzten Tag.
+
 ## Hinweise
 
 - **Gerät kurz „provisionierung“**: nach Änderungen an Netzen/Firewall übernimmt die Konsole die
@@ -207,4 +220,3 @@ Portweiterleitungen, QoS, VPN, WLANs, LEDs). Umstieg:
   Warnung geloggt und dann ignoriert.
 - **Diagnose** (*Integration → ⋮ → Diagnose herunterladen*) enthält Zähler je Dataset, fehlgeschlagene
   Datasets und geschwärzte Beispieldaten.
-- Releases entstehen automatisch aus der `version` in `manifest.json`.
