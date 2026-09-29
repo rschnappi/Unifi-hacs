@@ -1,4 +1,4 @@
-"""Sensoren: Controller-Health, WAN, Client-Zähler, Netzwerke, Fail2Ban, Geräte-Stats."""
+"""Sensoren: Controller, WAN, Clients, Netzwerke, Logs, Fail2Ban, Länder-Blocking, Geräte."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -24,7 +24,17 @@ from homeassistant.util import dt as dt_util
 
 from .coordinator import UniFiConfigEntry, UniFiCoordinator, UniFiData
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
+from .region import country_names, geo_setting, geo_state
 from .resources import LAN_PURPOSES, VPN_PURPOSES, object_name, scalar_attrs
+
+STAT_SENSORS = (
+    ("events", "Log-Einträge heute", "mdi:text-box-multiple"),
+    ("security", "Security-Events heute", "mdi:shield-alert-outline"),
+    ("threats", "IPS-Angriffe heute", "mdi:shield-bug"),
+    ("fw_blocks", "Firewall-Blocks heute", "mdi:wall-fire"),
+    ("ha_login", "HA-Login-Fehlversuche heute", "mdi:account-alert"),
+    ("bans", "Fail2Ban-Sperren heute", "mdi:shield-lock"),
+)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -198,6 +208,13 @@ async def async_setup_entry(
             if net.get("purpose") in LAN_PURPOSES | VPN_PURPOSES:
                 yield NetworkClientsSensor(coordinator, net_id)
         yield BanSensor(coordinator)
+        if coordinator.logs and coordinator.logs.enabled:
+            for key, name, icon in STAT_SENSORS:
+                yield StatSensor(coordinator, key, name, icon)
+            yield LastAlertSensor(coordinator)
+            yield LastBanSensor(coordinator)
+        if geo_setting(data) is not None:
+            yield RegionSensor(coordinator)
         for mac, dev in data.devices.items():
             for desc in DEVICE_SENSORS:
                 if desc.exists_fn(dev):
@@ -321,3 +338,74 @@ class BanSensor(ControllerEntity, SensorEntity):
             "bantime_min": logs.bantime,
             "log_error": logs.last_error,
         }
+
+
+class StatSensor(ControllerEntity, SensorEntity):
+    """Tageszähler aus dem System-Log (Reset um Mitternacht)."""
+
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_native_unit_of_measurement = "Ereignisse"
+
+    def __init__(self, coordinator: UniFiCoordinator, key: str, name: str, icon: str) -> None:
+        super().__init__(coordinator, f"stat_{key}", name)
+        self._key = key
+        self._attr_icon = icon
+
+    @property
+    def native_value(self) -> int:
+        return self.coordinator.logs.stat(self._key)
+
+
+class LastAlertSensor(ControllerEntity, SensorEntity):
+    """Letzte sicherheitsrelevante Meldung im Klartext."""
+
+    _attr_icon = "mdi:alert-decagram"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "last_alert", "Letzte Sicherheitsmeldung")
+
+    @property
+    def native_value(self) -> str | None:
+        a = self.coordinator.logs.last_alert
+        if not a:
+            return "keine"
+        return (a.get("message") or a.get("event") or "")[:255]
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self.coordinator.logs.last_alert or {})
+
+
+class LastBanSensor(ControllerEntity, SensorEntity):
+    _attr_icon = "mdi:shield-account"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "last_ban", "Fail2Ban letzte Sperre")
+
+    @property
+    def native_value(self) -> str:
+        b = self.coordinator.logs.last_ban
+        return f"{b['ip']} – {b['reason']}"[:255] if b else "keine"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict(self.coordinator.logs.last_ban or {})
+
+
+class RegionSensor(ControllerEntity, SensorEntity):
+    """Anzahl der Länder im Länder-Blocking, Liste als Attribut."""
+
+    _attr_icon = "mdi:earth-off"
+    _attr_native_unit_of_measurement = "Länder"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "region_countries", "Länder-Blocking Länder")
+
+    @property
+    def native_value(self) -> int:
+        return len(geo_state(geo_setting(self.coordinator.data))["countries"])
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        st = geo_state(geo_setting(self.coordinator.data))
+        return {**st, "names": country_names(st["countries"])}
