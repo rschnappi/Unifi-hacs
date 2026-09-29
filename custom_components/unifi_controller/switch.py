@@ -13,7 +13,7 @@ from .api import UniFiApiError
 from .const import CONF_CLIENT_SWITCHES, CONF_SWITCH_GROUPS
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
-from .region import async_set_geo, country_names, geo_setting, geo_state
+from .region import async_apply, country_names, state as region_state, zone_id
 from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS, SwitchGroup, object_name
 
 
@@ -32,7 +32,7 @@ async def async_setup_entry(
             for obj_id, obj in data.config.get(group.dataset, {}).items():
                 if group.field in obj and group.filter(obj):
                     yield ResourceSwitch(coordinator, group, obj_id)
-        if geo_setting(data) is not None:
+        if zone_id(data, "external") and region_state(data)["zones"]:
             yield RegionSwitch(coordinator)
         for mac, dev in data.devices.items():
             if "led_override" in dev or dev.get("type") in ("uap", "usw"):
@@ -97,6 +97,8 @@ class ResourceSwitch(ControllerEntity, SwitchEntity):
 
 # ------------------------------------------------------------ Länder-Blocking
 class RegionSwitch(ControllerEntity, SwitchEntity):
+    """Schaltet die „Rest blocken“-Policies des Länder-Blockings (Allow-Regeln bleiben)."""
+
     _attr_icon = "mdi:earth-off"
 
     def __init__(self, coordinator: UniFiCoordinator) -> None:
@@ -104,16 +106,16 @@ class RegionSwitch(ControllerEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        return geo_state(geo_setting(self.coordinator.data))["enabled"]
+        return region_state(self.coordinator.data)["enabled"]
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        st = geo_state(geo_setting(self.coordinator.data))
+        st = region_state(self.coordinator.data)
         return {**st, "names": country_names(st["countries"])}
 
     async def _set(self, value: bool) -> None:
         try:
-            await async_set_geo(self.coordinator, enabled=value)
+            await async_apply(self.coordinator, enabled=value)
         except UniFiApiError as err:
             raise HomeAssistantError(str(err)) from err
 
