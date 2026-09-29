@@ -46,6 +46,7 @@ get_objects:
           - port_profiles
           - usergroups
           - qos_rules
+          - settings
           - users
     filter:
       selector:
@@ -167,6 +168,31 @@ regenerate_wlan_password:
     notify:
       selector:
         boolean: {}
+set_region_blocking:
+  fields:
+    config_entry_id: *id001
+    enabled:
+      selector:
+        boolean: {}
+    action:
+      selector:
+        select:
+          options: [block, allow]
+    traffic_direction:
+      selector:
+        select:
+          options: [both, ingress, egress]
+    countries:
+      example: '["CN", "RU", "KP"]'
+      selector:
+        object: {}
+    add:
+      example: '["IR"]'
+      selector:
+        object: {}
+    remove:
+      selector:
+        object: {}
 block_client:
   fields:
     config_entry_id: *id001
