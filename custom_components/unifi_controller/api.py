@@ -42,6 +42,15 @@ async def async_load_secret(hass: HomeAssistant, name: str) -> str | None:
     )
 
 
+async def async_get_api_key(hass: HomeAssistant, data: Any) -> str | None:
+    """API-Key direkt aus dem Eintrag oder – falls gesetzt – aus secrets.yaml."""
+    if key := (data.get("api_key") or "").strip():
+        return key
+    if name := (data.get("secret_name") or "").strip():
+        return await async_load_secret(hass, name)
+    return None
+
+
 class UniFiClient:
     """Zugriff auf Legacy-API (/api/s/<site>), v2-API und Integration-API."""
 
