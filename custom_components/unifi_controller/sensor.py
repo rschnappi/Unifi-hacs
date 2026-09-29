@@ -1,4 +1,4 @@
-"""Sensoren: Controller-Health, WAN, Client-Zähler, Geräte-Stats."""
+"""Sensoren: Controller-Health, WAN, Client-Zähler, Netzwerke, Geräte-Stats."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -24,6 +24,7 @@ from homeassistant.util import dt as dt_util
 
 from .coordinator import UniFiConfigEntry, UniFiCoordinator, UniFiData
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
+from .resources import LAN_PURPOSES, VPN_PURPOSES, object_name, scalar_attrs
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -180,6 +181,9 @@ async def async_setup_entry(
             yield ControllerSensor(coordinator, desc)
         for sub in data.health:
             yield HealthSensor(coordinator, sub)
+        for net_id, net in data.config.get("networks", {}).items():
+            if net.get("purpose") in LAN_PURPOSES | VPN_PURPOSES:
+                yield NetworkClientsSensor(coordinator, net_id)
         for mac, dev in data.devices.items():
             for desc in DEVICE_SENSORS:
                 if desc.exists_fn(dev):
@@ -232,3 +236,43 @@ class DeviceSensor(DeviceEntity, SensorEntity):
     def native_value(self) -> Any:
         dev = self.device
         return self.entity_description.value_fn(dev) if dev else None
+
+
+class NetworkClientsSensor(ControllerEntity, SensorEntity):
+    """Clients je Netzwerk/VLAN; Netz-Konfiguration als Attribute."""
+
+    _attr_icon = "mdi:lan-connect"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: UniFiCoordinator, net_id: str) -> None:
+        net = coordinator.data.config["networks"][net_id]
+        label = "VPN" if net.get("purpose") in VPN_PURPOSES else "Netzwerk"
+        super().__init__(
+            coordinator, f"network_clients_{net_id}", f"{label} {object_name(net)} Clients"
+        )
+        self._id = net_id
+
+    @property
+    def _net(self) -> dict | None:
+        return self.coordinator.data.config.get("networks", {}).get(self._id)
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._net is not None
+
+    @property
+    def native_value(self) -> int:
+        name = (self._net or {}).get("name")
+        return sum(
+            1 for c in self.coordinator.data.clients.values()
+            if c.get("network_id") == self._id or (name and c.get("network") == name)
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        net = self._net or {}
+        keep = ("purpose", "vlan", "vlan_enabled", "ip_subnet", "enabled", "dhcpd_enabled",
+                "dhcpd_start", "dhcpd_stop", "internet_access_enabled",
+                "network_isolation_enabled", "vpn_type", "local_port", "id")
+        attrs = scalar_attrs(net)
+        return {k: attrs[k] for k in keep if k in attrs}
