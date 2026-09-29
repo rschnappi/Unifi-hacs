@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import ipaddress
 from typing import Any
 
 import voluptuous as vol
@@ -29,11 +30,13 @@ from .const import (
     CONF_CONFIG_INTERVAL,
     CONF_F2B,
     CONF_F2B_BANTIME,
+    CONF_F2B_BANTIME_INSTANT,
     CONF_F2B_CATEGORIES,
     CONF_F2B_FINDTIME,
     CONF_F2B_HA_LOGIN,
     CONF_F2B_INSTANT,
     CONF_F2B_MAXRETRY,
+    CONF_F2B_RECIDIVE,
     CONF_F2B_WHITELIST,
     CONF_LOG_BACKFILL,
     CONF_LOG_FILE,
@@ -45,18 +48,19 @@ from .const import (
     DEFAULT_BAN_GROUP,
     DEFAULT_CONFIG_INTERVAL,
     DEFAULT_F2B_BANTIME,
+    DEFAULT_F2B_BANTIME_INSTANT,
     DEFAULT_F2B_CATEGORIES,
     DEFAULT_F2B_FINDTIME,
     DEFAULT_F2B_INSTANT,
     DEFAULT_F2B_MAXRETRY,
+    DEFAULT_F2B_RECIDIVE,
     DEFAULT_HOST,
     DEFAULT_PREFIX,
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SITE,
     DOMAIN,
 )
-from .countries import COUNTRIES
-from .region import ACTIONS, DIRECTIONS, async_set_geo, geo_setting, geo_state
+from .region import async_apply, async_country_codes, state as region_state, target_zones, zone_id
 from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS
 
 GROUP_LABELS = {
@@ -192,39 +196,56 @@ class UniFiControllerOptionsFlow(OptionsFlow):
     async def async_step_region(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Länder-Blocking – wird direkt im Controller gespeichert."""
+        """Länder-Blocking über Zonen-Policies – wird direkt im Controller gespeichert."""
         coordinator = getattr(self.config_entry, "runtime_data", None)
-        setting = geo_setting(coordinator.data) if coordinator else None
-        if setting is None:
+        data = coordinator.data if coordinator else None
+        if data is None or not zone_id(data, "external"):
             return self.async_abort(reason="region_unsupported")
         errors: dict[str, str] = {}
+        try:
+            codes = await async_country_codes(coordinator)
+        except UniFiApiError:
+            return self.async_abort(reason="region_unsupported")
+        zones = target_zones(data)
         if user_input is not None:
+            exceptions = [e.strip() for e in user_input.get("region_exceptions", "").split(",")
+                          if e.strip()]
             try:
-                await async_set_geo(
-                    coordinator,
-                    enabled=user_input["region_enabled"],
-                    action=user_input["region_action"],
-                    traffic_direction=user_input["region_direction"],
-                    countries=user_input.get("region_countries", []),
-                )
-            except UniFiApiError as err:
-                errors["base"] = "no_countries" if "mindestens" in str(err) else "region_failed"
-            else:
-                return self.async_create_entry(data=dict(self.config_entry.options))
-        st = geo_state(setting)
+                for e in exceptions:
+                    ipaddress.ip_network(e, strict=False)
+            except ValueError:
+                errors["region_exceptions"] = "invalid_network"
+            if not user_input.get("region_countries"):
+                errors["base"] = "no_countries"
+            if not errors:
+                try:
+                    await async_apply(
+                        coordinator,
+                        enabled=user_input["region_enabled"],
+                        countries=user_input["region_countries"],
+                        exceptions=exceptions,
+                        zones=user_input.get("region_zones", []),
+                        wireguard=user_input["region_wireguard"],
+                    )
+                except UniFiApiError:
+                    errors["base"] = "region_failed"
+                else:
+                    return self.async_create_entry(data=dict(self.config_entry.options))
+        st = region_state(data)
+        default_zones = st["zones"] or [z for z, n in zones.items() if n.lower() == "iot"]
         schema = vol.Schema({
             vol.Required("region_enabled", default=st["enabled"]): bool,
-            vol.Required("region_action", default=st["action"]): SelectSelector(
-                SelectSelectorConfig(options=ACTIONS, translation_key="region_action",
-                                     mode=SelectSelectorMode.LIST)),
-            vol.Required("region_direction", default=st["traffic_direction"]): SelectSelector(
-                SelectSelectorConfig(options=DIRECTIONS, translation_key="region_direction",
-                                     mode=SelectSelectorMode.LIST)),
-            vol.Optional("region_countries", default=st["countries"]): SelectSelector(
+            vol.Required("region_countries", default=st["countries"] or ["AT"]): SelectSelector(
                 SelectSelectorConfig(
                     options=[SelectOptionDict(value=c, label=f"{n} ({c})")
-                             for c, n in COUNTRIES.items()],
+                             for c, n in sorted(codes.items(), key=lambda i: i[1])],
                     multiple=True, mode=SelectSelectorMode.DROPDOWN, sort=False)),
+            vol.Required("region_zones", default=default_zones): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=z, label=n) for z, n in zones.items()],
+                    multiple=True, mode=SelectSelectorMode.LIST)),
+            vol.Required("region_wireguard", default=st["wireguard"]): bool,
+            vol.Optional("region_exceptions", default=", ".join(st["exceptions"])): str,
         })
         return self.async_show_form(step_id="region", data_schema=schema, errors=errors)
 
@@ -265,6 +286,11 @@ class UniFiControllerOptionsFlow(OptionsFlow):
                 vol.All(vol.Coerce(int), vol.Range(min=10, max=86400)),
             vol.Required(CONF_F2B_BANTIME, default=o.get(CONF_F2B_BANTIME, DEFAULT_F2B_BANTIME)):
                 vol.All(vol.Coerce(int), vol.Range(min=0, max=525600)),
+            vol.Required(CONF_F2B_BANTIME_INSTANT,
+                         default=o.get(CONF_F2B_BANTIME_INSTANT, DEFAULT_F2B_BANTIME_INSTANT)):
+                vol.All(vol.Coerce(int), vol.Range(min=0, max=525600)),
+            vol.Required(CONF_F2B_RECIDIVE, default=o.get(CONF_F2B_RECIDIVE, DEFAULT_F2B_RECIDIVE)):
+                vol.All(vol.Coerce(int), vol.Range(min=0, max=100)),
             vol.Required(
                 CONF_F2B_CATEGORIES, default=o.get(CONF_F2B_CATEGORIES, DEFAULT_F2B_CATEGORIES)
             ): str,
