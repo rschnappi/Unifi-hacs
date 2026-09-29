@@ -19,6 +19,7 @@ DATASETS: dict[str, str] = {
     "dns_records": "v2/static-dns",
     "port_profiles": "rest/portconf",
     "usergroups": "rest/usergroup",
+    "qos_rules": "v2/qos-rules",
     "users": "rest/user",
 }
 OPTIONAL_DATASETS = {"users"}  # nur mit Client-Sperr-Schaltern
@@ -123,6 +124,7 @@ SWITCH_GROUPS: tuple[SwitchGroup, ...] = (
                 icon="mdi:routes"),
     SwitchGroup(key="portforwards", dataset="portforwards", label="Portweiterleitung",
                 icon="mdi:router-network"),
+    SwitchGroup(key="qos_rules", dataset="qos_rules", label="QoS", icon="mdi:speedometer"),
     SwitchGroup(key="routes", dataset="routes", label="Route", icon="mdi:routes"),
     SwitchGroup(key="dns_records", dataset="dns_records", label="DNS", icon="mdi:dns"),
 )
