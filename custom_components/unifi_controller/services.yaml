@@ -1,6 +1,6 @@
 api_request:
   fields:
-    config_entry_id:
+    config_entry_id: &id001
       selector:
         config_entry:
           integration: unifi_controller
@@ -9,39 +9,123 @@ api_request:
       default: GET
       selector:
         select:
-          options: [GET, POST, PUT, DELETE]
+          options:
+          - GET
+          - POST
+          - PUT
+          - DELETE
     path:
       required: true
-      example: "stat/sysinfo"
+      example: stat/sysinfo
       selector:
-        text:
+        text: {}
     payload:
       selector:
-        object:
-block_client: &mac
+        object: {}
+    include_secrets:
+      selector:
+        boolean: {}
+get_objects:
   fields:
-    config_entry_id:
-      selector:
-        config_entry:
-          integration: unifi_controller
-    mac:
+    config_entry_id: *id001
+    resource: &id002
       required: true
-      example: "aa:bb:cc:dd:ee:ff"
       selector:
-        text:
-unblock_client: *mac
-reconnect_client: *mac
-restart_device: *mac
+        select:
+          options:
+          - networks
+          - wlans
+          - firewall_policies
+          - firewall_zones
+          - firewall_groups
+          - trafficrules
+          - trafficroutes
+          - portforwards
+          - routes
+          - dns_records
+          - port_profiles
+          - usergroups
+          - users
+    filter:
+      selector:
+        text: {}
+    refresh:
+      selector:
+        boolean: {}
+    include_secrets:
+      selector:
+        boolean: {}
+update_object:
+  fields:
+    config_entry_id: *id001
+    resource: *id002
+    object: &id003
+      required: true
+      example: Sperre Benjamin Internet
+      selector:
+        text: {}
+    changes:
+      required: true
+      example: '{"enabled": true}'
+      selector:
+        object: {}
+create_object:
+  fields:
+    config_entry_id: *id001
+    resource: *id002
+    data:
+      required: true
+      selector:
+        object: {}
+delete_object:
+  fields:
+    config_entry_id: *id001
+    resource: *id002
+    object: *id003
+set_enabled:
+  fields:
+    config_entry_id: *id001
+    resource: *id002
+    object: *id003
+    enabled:
+      required: true
+      selector:
+        boolean: {}
+refresh:
+  fields:
+    config_entry_id: *id001
+block_client:
+  fields:
+    config_entry_id: *id001
+    mac: &id004
+      required: true
+      example: aa:bb:cc:dd:ee:ff
+      selector:
+        text: {}
+unblock_client:
+  fields:
+    config_entry_id: *id001
+    mac: *id004
+reconnect_client:
+  fields:
+    config_entry_id: *id001
+    mac: *id004
+forget_client:
+  fields:
+    config_entry_id: *id001
+    mac: *id004
+unauthorize_guest:
+  fields:
+    config_entry_id: *id001
+    mac: *id004
+restart_device:
+  fields:
+    config_entry_id: *id001
+    mac: *id004
 authorize_guest:
   fields:
-    config_entry_id:
-      selector:
-        config_entry:
-          integration: unifi_controller
-    mac:
-      required: true
-      selector:
-        text:
+    config_entry_id: *id001
+    mac: *id004
     minutes:
       selector:
         number:
@@ -50,14 +134,8 @@ authorize_guest:
           unit_of_measurement: min
 power_cycle_port:
   fields:
-    config_entry_id:
-      selector:
-        config_entry:
-          integration: unifi_controller
-    mac:
-      required: true
-      selector:
-        text:
+    config_entry_id: *id001
+    mac: *id004
     port_idx:
       required: true
       selector:
@@ -67,18 +145,15 @@ power_cycle_port:
           mode: box
 set_wlan:
   fields:
-    config_entry_id:
-      selector:
-        config_entry:
-          integration: unifi_controller
+    config_entry_id: *id001
     wlan:
       required: true
-      example: "guest"
+      example: guest
       selector:
-        text:
+        text: {}
     enabled:
       selector:
-        boolean:
+        boolean: {}
     passphrase:
       selector:
         text:
