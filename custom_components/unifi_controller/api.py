@@ -1,0 +1,183 @@
+"""Schlanker async Client für die UniFi Network API (UniFi OS, API-Key)."""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+from typing import Any
+
+import aiohttp
+
+from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
+from homeassistant.util.yaml import load_yaml_dict
+
+_LOGGER = logging.getLogger(__name__)
+
+TIMEOUT = 25
+ALLOWED_METHODS = {"GET", "POST", "PUT", "DELETE"}
+
+
+class UniFiApiError(HomeAssistantError):
+    """Allgemeiner API-Fehler."""
+
+
+class UniFiAuthError(UniFiApiError):
+    """API-Key ungültig oder ohne Berechtigung."""
+
+
+def _read_secret(path: str, name: str) -> str | None:
+    try:
+        data = load_yaml_dict(path)
+    except (FileNotFoundError, HomeAssistantError):
+        return None
+    value = data.get(name)
+    return str(value) if value else None
+
+
+async def async_load_secret(hass: HomeAssistant, name: str) -> str | None:
+    """API-Key aus secrets.yaml lesen (wird nie im Config-Entry gespeichert)."""
+    return await hass.async_add_executor_job(
+        _read_secret, hass.config.path("secrets.yaml"), name
+    )
+
+
+class UniFiClient:
+    """Zugriff auf Legacy-API (/api/s/<site>), v2-API und Integration-API."""
+
+    def __init__(
+        self, session: aiohttp.ClientSession, host: str, api_key: str, site: str
+    ) -> None:
+        self._session = session
+        self._api_key = api_key
+        self.host = host
+        self.site = site
+        base = f"https://{host}/proxy/network"
+        self._legacy = f"{base}/api/s/{site}/"
+        self._v2 = f"{base}/v2/api/site/{site}/"
+        self._integration = f"{base}/integration/v1/"
+
+    # ------------------------------------------------------------------ core
+    def resolve(self, path: str) -> tuple[str, bool]:
+        """Pfad -> (URL, legacy?). 'v2/…' und 'integration/…' werden gemappt."""
+        path = path.strip().lstrip("/")
+        if not path or ".." in path:
+            raise UniFiApiError("Pfad nicht erlaubt")
+        if path.startswith("v2/"):
+            return self._v2 + path[3:], False
+        if path.startswith("integration/"):
+            return self._integration + path[12:], False
+        return self._legacy + path, True
+
+    async def request(self, method: str, path: str, payload: Any = None) -> Any:
+        method = method.upper()
+        if method not in ALLOWED_METHODS:
+            raise UniFiApiError(f"Methode {method} nicht erlaubt")
+        url, legacy = self.resolve(path)
+        headers = {"X-API-KEY": self._api_key, "Accept": "application/json"}
+        try:
+            async with asyncio.timeout(TIMEOUT):
+                async with self._session.request(
+                    method, url, json=payload, headers=headers
+                ) as resp:
+                    text = await resp.text()
+                    if resp.status in (401, 403):
+                        raise UniFiAuthError(f"HTTP {resp.status}")
+                    if resp.status >= 400:
+                        raise UniFiApiError(f"HTTP {resp.status} {path}: {text[:300]}")
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise UniFiApiError(f"Verbindung zu {self.host} fehlgeschlagen: {err}") from err
+
+        if not text:
+            return None
+        try:
+            data = json.loads(text)
+        except ValueError as err:
+            raise UniFiApiError(f"Keine JSON-Antwort von {path}") from err
+
+        if legacy and isinstance(data, dict) and "meta" in data:
+            meta = data.get("meta") or {}
+            if meta.get("rc") != "ok":
+                raise UniFiApiError(meta.get("msg", "Unbekannter Fehler"))
+            return data.get("data", [])
+        return data
+
+    # ----------------------------------------------------------------- reads
+    async def get_sysinfo(self) -> dict[str, Any]:
+        data = await self.request("GET", "stat/sysinfo")
+        return data[0] if data else {}
+
+    async def get_health(self) -> list[dict]:
+        return await self.request("GET", "stat/health") or []
+
+    async def get_devices(self) -> list[dict]:
+        return await self.request("GET", "stat/device") or []
+
+    async def get_clients(self) -> list[dict]:
+        return await self.request("GET", "stat/sta") or []
+
+    async def get_users(self) -> list[dict]:
+        return await self.request("GET", "rest/user") or []
+
+    async def get_wlans(self) -> list[dict]:
+        return await self.request("GET", "rest/wlanconf") or []
+
+    async def get_portforwards(self) -> list[dict]:
+        return await self.request("GET", "rest/portforward") or []
+
+    async def get_trafficrules(self) -> list[dict]:
+        return await self.request("GET", "v2/trafficrules") or []
+
+    async def get_firewall_policies(self) -> list[dict]:
+        return await self.request("GET", "v2/firewall-policies") or []
+
+    # ---------------------------------------------------------------- writes
+    async def stamgr(self, cmd: str, mac: str, **extra: Any) -> Any:
+        return await self.request(
+            "POST", "cmd/stamgr", {"cmd": cmd, "mac": mac.lower(), **extra}
+        )
+
+    async def devmgr(self, cmd: str, mac: str, **extra: Any) -> Any:
+        return await self.request(
+            "POST", "cmd/devmgr", {"cmd": cmd, "mac": mac.lower(), **extra}
+        )
+
+    async def update_wlan(self, wlan_id: str, changes: dict[str, Any]) -> Any:
+        return await self.request("PUT", f"rest/wlanconf/{wlan_id}", changes)
+
+    async def set_led(self, device_id: str, mode: str) -> Any:
+        return await self.request("PUT", f"rest/device/{device_id}", {"led_override": mode})
+
+    async def set_port_poe(self, device: dict, port_idx: int, mode: str) -> Any:
+        overrides = [dict(o) for o in device.get("port_overrides", [])]
+        for override in overrides:
+            if override.get("port_idx") == port_idx:
+                override["poe_mode"] = mode
+                break
+        else:
+            overrides.append({"port_idx": port_idx, "poe_mode": mode})
+        return await self.request(
+            "PUT", f"rest/device/{device['_id']}", {"port_overrides": overrides}
+        )
+
+    async def set_portforward(self, rule: dict, enabled: bool) -> Any:
+        return await self.request(
+            "PUT", f"rest/portforward/{rule['_id']}", {**rule, "enabled": enabled}
+        )
+
+    async def set_trafficrule(self, rule: dict, enabled: bool) -> Any:
+        return await self.request(
+            "PUT", f"v2/trafficrules/{rule['_id']}", {**rule, "enabled": enabled}
+        )
+
+    async def set_firewall_policy(self, policy: dict, enabled: bool) -> Any:
+        body = {**policy, "enabled": enabled}
+        try:
+            return await self.request("PUT", f"v2/firewall-policies/{policy['_id']}", body)
+        except UniFiAuthError:
+            raise
+        except UniFiApiError:
+            _LOGGER.debug("Einzel-PUT fehlgeschlagen, versuche Batch-Endpunkt")
+            return await self.request(
+                "PUT", "v2/firewall-policies/batch", [{"_id": policy["_id"], "enabled": enabled}]
+            )
