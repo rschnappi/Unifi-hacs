@@ -81,6 +81,7 @@ class Fail2BanActive(ControllerEntity, BinarySensorEntity):
         logs = self.coordinator.logs
         return {
             "maxretry": logs.maxretry, "findtime_s": logs.findtime, "bantime_min": logs.bantime,
+            "bantime_instant_min": logs.bantime_instant, "recidive": logs.recidive,
             "categories": sorted(logs.categories), "instant_events": sorted(logs.instant),
             "ha_login": logs.ha_login, "group": logs.group_name,
             "whitelist": [str(n) for n in logs.whitelist], "log_error": logs.last_error,
