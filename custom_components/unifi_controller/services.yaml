@@ -1,0 +1,85 @@
+api_request:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: unifi_controller
+    method:
+      required: true
+      default: GET
+      selector:
+        select:
+          options: [GET, POST, PUT, DELETE]
+    path:
+      required: true
+      example: "stat/sysinfo"
+      selector:
+        text:
+    payload:
+      selector:
+        object:
+block_client: &mac
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: unifi_controller
+    mac:
+      required: true
+      example: "aa:bb:cc:dd:ee:ff"
+      selector:
+        text:
+unblock_client: *mac
+reconnect_client: *mac
+restart_device: *mac
+authorize_guest:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: unifi_controller
+    mac:
+      required: true
+      selector:
+        text:
+    minutes:
+      selector:
+        number:
+          min: 1
+          max: 525600
+          unit_of_measurement: min
+power_cycle_port:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: unifi_controller
+    mac:
+      required: true
+      selector:
+        text:
+    port_idx:
+      required: true
+      selector:
+        number:
+          min: 1
+          max: 52
+          mode: box
+set_wlan:
+  fields:
+    config_entry_id:
+      selector:
+        config_entry:
+          integration: unifi_controller
+    wlan:
+      required: true
+      example: "guest"
+      selector:
+        text:
+    enabled:
+      selector:
+        boolean:
+    passphrase:
+      selector:
+        text:
+          type: password
