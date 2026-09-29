@@ -1,7 +1,8 @@
-"""Services: generische CRUD-Operationen, Logs/Fail2Ban, Secret-Rotation, Aktionen."""
+"""Services: generische CRUD-Operationen, Logs/Fail2Ban, Länder-Blocking, Secrets, Aktionen."""
 from __future__ import annotations
 
 import ipaddress
+import logging
 import time
 from typing import Any
 
@@ -15,9 +16,13 @@ from homeassistant.helpers import config_validation as cv
 from .api import UniFiApiError
 from .const import DOMAIN
 from .coordinator import UniFiCoordinator
+from .countries import COUNTRIES
 from .logs import parse_entry
+from .region import ACTIONS, DIRECTIONS, async_set_geo, country_names
 from .resources import DATASETS, object_name, redact
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan
+
+_LOGGER = logging.getLogger(__name__)
 
 ATTR_ENTRY = "config_entry_id"
 ATTR_MAC = "mac"
@@ -54,6 +59,7 @@ async def _run(coro) -> Any:
     try:
         return await coro
     except UniFiApiError as err:
+        _LOGGER.warning("UniFi-Service fehlgeschlagen: %s", err)
         raise HomeAssistantError(str(err)) from err
 
 
@@ -157,6 +163,16 @@ def async_setup_services(hass: HomeAssistant) -> None:
         res = await _run(async_rotate_wlan(
             c, wlan, call.data["length"], notify=call.data["notify"]))
         return res if call.return_response else {k: v for k, v in res.items() if k != "passphrase"}
+
+    # ------------------------------------------------------------ Länder-Blocking
+    async def set_region_blocking(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        st = await _run(async_set_geo(
+            c, enabled=call.data.get("enabled"), action=call.data.get("action"),
+            traffic_direction=call.data.get("traffic_direction"),
+            countries=call.data.get("countries"), add=call.data.get("add"),
+            remove=call.data.get("remove")))
+        return {**st, "names": country_names(st["countries"])}
 
     # ------------------------------------------------------------ Aktionen
     async def stamgr(cmd: str, call: ServiceCall, **extra: Any) -> None:
@@ -267,6 +283,16 @@ def async_setup_services(hass: HomeAssistant) -> None:
         vol.Required("wlan"): cv.string,
         vol.Optional("length", default=24): vol.All(vol.Coerce(int), vol.Range(min=12, max=63)),
         vol.Optional("notify", default=True): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    codes = vol.All(cv.ensure_list, [vol.All(cv.string, vol.Upper, vol.In(list(COUNTRIES)))])
+    reg(DOMAIN, "set_region_blocking", set_region_blocking, schema=vol.Schema({
+        **BASE,
+        vol.Optional("enabled"): cv.boolean,
+        vol.Optional("action"): vol.In(ACTIONS),
+        vol.Optional("traffic_direction"): vol.In(DIRECTIONS),
+        vol.Optional("countries"): codes,
+        vol.Optional("add"): codes,
+        vol.Optional("remove"): codes,
     }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "get_bans", get_bans, schema=vol.Schema(BASE),
         supports_response=SupportsResponse.ONLY)
