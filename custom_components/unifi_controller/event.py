@@ -1,10 +1,14 @@
-"""Event-Entitäten: UniFi System-Log, Sicherheitsalarme und Fail2Ban-Aktionen."""
+"""Event-Entitäten: UniFi System-Log, Sicherheitsalarme und Fail2Ban-Aktionen.
+
+Jede Zustandsänderung übernimmt den Kontext des auslösenden (beschriebenen) Bus-Events.
+Dadurch zeigt HA in der Aktivitätsanzeige unter „Was ist passiert“ die Meldung im Klartext.
+"""
 from __future__ import annotations
 
 from typing import Any
 
 from homeassistant.components.event import EventEntity
-from homeassistant.core import Event, HomeAssistant, callback
+from homeassistant.core import Context, Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import EVENT_ALERT, EVENT_BAN
@@ -40,8 +44,10 @@ class LogEvent(ControllerEntity, EventEntity):
         self.async_on_remove(self.coordinator.logs.async_add_listener(self._handle))
 
     @callback
-    def _handle(self, entry: dict[str, Any]) -> None:
+    def _handle(self, entry: dict[str, Any], ctx: Context | None = None) -> None:
         attrs = {k: v for k, v in entry.items() if v is not None and k != "id"}
+        if ctx is not None:
+            self.async_set_context(ctx)
         self._trigger_event(event_type(entry.get("category")), attrs)
         self.async_write_ha_state()
 
@@ -67,6 +73,7 @@ class AlertEvent(ControllerEntity, EventEntity):
     def _handle(self, event: Event) -> None:
         data = dict(event.data)
         etype = "ha_login" if data.get("category") == "HA_LOGIN" else event_type(data.get("category"))
+        self.async_set_context(event.context)
         self._trigger_event(etype, data)
         self.async_write_ha_state()
 
@@ -89,6 +96,7 @@ class Fail2BanEvent(ControllerEntity, EventEntity):
     @callback
     def _handle(self, event: Event) -> None:
         data = dict(event.data)
+        self.async_set_context(event.context)
         self._trigger_event(data.pop("action", "ban"), data)
         self.async_write_ha_state()
 
