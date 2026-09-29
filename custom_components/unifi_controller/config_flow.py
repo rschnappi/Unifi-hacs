@@ -12,6 +12,10 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    SelectOptionDict,
+    SelectSelector,
+    SelectSelectorConfig,
+    SelectSelectorMode,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
@@ -51,6 +55,8 @@ from .const import (
     DEFAULT_SITE,
     DOMAIN,
 )
+from .countries import COUNTRIES
+from .region import ACTIONS, DIRECTIONS, async_set_geo, geo_setting, geo_state
 from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS
 
 GROUP_LABELS = {
@@ -181,7 +187,46 @@ class UniFiControllerConfigFlow(ConfigFlow, domain=DOMAIN):
 
 class UniFiControllerOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return self.async_show_menu(step_id="init", menu_options=["general", "logs"])
+        return self.async_show_menu(step_id="init", menu_options=["general", "logs", "region"])
+
+    async def async_step_region(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Länder-Blocking – wird direkt im Controller gespeichert."""
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        setting = geo_setting(coordinator.data) if coordinator else None
+        if setting is None:
+            return self.async_abort(reason="region_unsupported")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                await async_set_geo(
+                    coordinator,
+                    enabled=user_input["region_enabled"],
+                    action=user_input["region_action"],
+                    traffic_direction=user_input["region_direction"],
+                    countries=user_input.get("region_countries", []),
+                )
+            except UniFiApiError as err:
+                errors["base"] = "no_countries" if "mindestens" in str(err) else "region_failed"
+            else:
+                return self.async_create_entry(data=dict(self.config_entry.options))
+        st = geo_state(setting)
+        schema = vol.Schema({
+            vol.Required("region_enabled", default=st["enabled"]): bool,
+            vol.Required("region_action", default=st["action"]): SelectSelector(
+                SelectSelectorConfig(options=ACTIONS, translation_key="region_action",
+                                     mode=SelectSelectorMode.LIST)),
+            vol.Required("region_direction", default=st["traffic_direction"]): SelectSelector(
+                SelectSelectorConfig(options=DIRECTIONS, translation_key="region_direction",
+                                     mode=SelectSelectorMode.LIST)),
+            vol.Optional("region_countries", default=st["countries"]): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=c, label=f"{n} ({c})")
+                             for c, n in COUNTRIES.items()],
+                    multiple=True, mode=SelectSelectorMode.DROPDOWN, sort=False)),
+        })
+        return self.async_show_form(step_id="region", data_schema=schema, errors=errors)
 
     async def async_step_general(
         self, user_input: dict[str, Any] | None = None
