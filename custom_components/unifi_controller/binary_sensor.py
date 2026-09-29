@@ -9,6 +9,9 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 
+# UniFi-Gerätestatus: 1 verbunden, 4 Update läuft, 5 provisioniert gerade – alles „online“
+ONLINE_STATES = {1, 4, 5}
+
 
 async def async_setup_entry(
     hass: HomeAssistant,
@@ -46,7 +49,7 @@ class DeviceOnline(DeviceEntity, BinarySensorEntity):
 
     @property
     def is_on(self) -> bool:
-        return (self.device or {}).get("state") == 1
+        return (self.device or {}).get("state") in ONLINE_STATES
 
 
 class DeviceUpgradable(DeviceEntity, BinarySensorEntity):
