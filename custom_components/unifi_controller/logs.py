@@ -6,6 +6,7 @@ from collections.abc import Callable
 from datetime import datetime
 import ipaddress
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 import os
 import time
@@ -23,6 +24,8 @@ from .const import (
     CONF_F2B_BANTIME,
     CONF_F2B_CATEGORIES,
     CONF_F2B_FINDTIME,
+    CONF_F2B_HA_LOGIN,
+    CONF_F2B_INSTANT,
     CONF_F2B_MAXRETRY,
     CONF_F2B_WHITELIST,
     CONF_LOG_BACKFILL,
@@ -32,6 +35,7 @@ from .const import (
     DEFAULT_F2B_BANTIME,
     DEFAULT_F2B_CATEGORIES,
     DEFAULT_F2B_FINDTIME,
+    DEFAULT_F2B_INSTANT,
     DEFAULT_F2B_MAXRETRY,
     DOMAIN,
     EVENT_BAN,
@@ -46,6 +50,10 @@ _LOGGER = logging.getLogger(__name__)
 LOG_PATH = "v2/system-log/all"
 PAGE_SIZE = 200
 MAX_PAGES = 5
+
+HA_LOGIN_NOTIFICATION = "http-login"
+_IP_IN_PARENS = re.compile(r"\(([0-9A-Fa-f:.]+)\)")
+_ANY_IP = re.compile(r"[0-9A-Fa-f:.]{7,}")
 
 EVENT_TYPES = ["security", "client", "device", "admin", "vpn", "system", "other"]
 
@@ -139,6 +147,12 @@ class LogManager:
             for w in (opts.get(CONF_F2B_WHITELIST) or "").split(",") if w.strip()
         ]
         self.group_name: str = opts.get(CONF_BAN_GROUP, DEFAULT_BAN_GROUP)
+        self.instant = {
+            e.strip().upper()
+            for e in opts.get(CONF_F2B_INSTANT, DEFAULT_F2B_INSTANT).split(",") if e.strip()
+        }
+        self.ha_login: bool = opts.get(CONF_F2B_HA_LOGIN, True)
+        self._unsub_login: Callable[[], None] | None = None
         backfill = int(opts.get(CONF_LOG_BACKFILL, 0))
         self._last_ts = int(time.time() * 1000) - backfill * 60_000
         self._seen: deque[str] = deque(maxlen=5000)
@@ -154,6 +168,38 @@ class LogManager:
         self.bans = (await self._store.async_load() or {}).get("bans", {})
         if self.enabled and self.log_file:
             self._writer = await self.hass.async_add_executor_job(self._open_file)
+        if self.f2b and self.ha_login:
+            self._watch_ha_logins()
+
+    # -------------------------------------------------------------- HA-Logins
+    def _watch_ha_logins(self) -> None:
+        """Fehlgeschlagene HA-Anmeldungen (Benachrichtigung 'http-login') mitzählen."""
+        try:
+            from homeassistant.components import persistent_notification as pn  # noqa: PLC0415
+
+            self._unsub_login = pn.async_register_callback(self.hass, self._on_notification)
+        except (ImportError, AttributeError) as err:  # ältere/neuere Core-API
+            _LOGGER.warning("HA-Login-Überwachung nicht verfügbar: %s", err)
+
+    @callback
+    def _on_notification(self, update_type: Any, notifications: dict[str, Any]) -> None:
+        if str(getattr(update_type, "value", update_type)) not in ("added", "updated"):
+            return
+        note = notifications.get(HA_LOGIN_NOTIFICATION)
+        if not note:
+            return
+        msg = str(note.get("message", ""))
+        cands = _IP_IN_PARENS.findall(msg) or _ANY_IP.findall(msg)
+        ip = next((c for c in reversed(cands) if _is_ip(c)), None)
+        if not ip:
+            return
+        entry = {
+            "category": "HA_LOGIN", "event": "HA_LOGIN_FAILED", "severity": "HIGH",
+            "src_ip": ip, "message": msg.splitlines()[0] if msg else "",
+            "timestamp": dt_util.utcnow().isoformat(),
+        }
+        self.hass.bus.async_fire(EVENT_LOG, entry)
+        self._check_f2b(entry, force_category=True)
 
     def _open_file(self) -> logging.Logger:
         os.makedirs(os.path.dirname(self.log_file) or ".", exist_ok=True)
@@ -170,6 +216,9 @@ class LogManager:
         return logger
 
     def close(self) -> None:
+        if self._unsub_login:
+            self._unsub_login()
+            self._unsub_login = None
         if self._writer:
             for h in list(self._writer.handlers):
                 self._writer.removeHandler(h)
@@ -245,11 +294,17 @@ class LogManager:
         return (not addr.is_global) or any(addr in n for n in self.whitelist)
 
     @callback
-    def _check_f2b(self, entry: dict) -> None:
+    def _check_f2b(self, entry: dict, force_category: bool = False) -> None:
         ip = entry.get("src_ip")
         if not self.f2b or not ip or ip in self.bans or self._ignored(ip):
             return
-        if self.categories and (entry.get("category") or "").upper() not in self.categories:
+        event = (entry.get("event") or "").upper()
+        if event in self.instant:
+            self.bans[ip] = {"since": time.time(), "until": None, "reason": "pending"}
+            self.hass.async_create_task(self._instant_ban(ip, event))
+            return
+        if (not force_category and self.categories
+                and (entry.get("category") or "").upper() not in self.categories):
             return
         now = time.monotonic()
         hits = self._hits.setdefault(ip, deque())
@@ -260,6 +315,13 @@ class LogManager:
             self._hits.pop(ip, None)
             reason = f"{len(hits)}× {entry.get('event')} in {self.findtime}s"
             self.hass.async_create_task(self.async_ban(ip, self.bantime or None, reason))
+
+    async def _instant_ban(self, ip: str, event: str) -> None:
+        self.bans.pop(ip, None)  # Platzhalter gegen Doppel-Bans entfernen
+        try:
+            await self.async_ban(ip, self.bantime or None, f"{event} (sofort)")
+        except UniFiApiError as err:
+            _LOGGER.warning("Fail2Ban: Sperre von %s fehlgeschlagen: %s", ip, err)
 
     # Schreibzugriffe hier bewusst OHNE coordinator.async_command (kein Refresh aus
     # dem Poll heraus → keine Rekursion); Cache wird lokal nachgezogen.
