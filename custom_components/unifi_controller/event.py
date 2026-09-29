@@ -1,4 +1,4 @@
-"""Event-Entitäten: UniFi System-Log und Fail2Ban-Aktionen."""
+"""Event-Entitäten: UniFi System-Log, Sicherheitsalarme und Fail2Ban-Aktionen."""
 from __future__ import annotations
 
 from typing import Any
@@ -7,7 +7,7 @@ from homeassistant.components.event import EventEntity
 from homeassistant.core import Event, HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import EVENT_BAN
+from .const import EVENT_ALERT, EVENT_BAN
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity
 from .logs import EVENT_TYPES, event_type
@@ -22,6 +22,7 @@ async def async_setup_entry(
     entities: list[EventEntity] = [Fail2BanEvent(coordinator)]
     if coordinator.logs and coordinator.logs.enabled:
         entities.append(LogEvent(coordinator))
+        entities.append(AlertEvent(coordinator))
     async_add_entities(entities)
 
 
@@ -47,6 +48,31 @@ class LogEvent(ControllerEntity, EventEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Zustand nur bei Log-Einträgen ändern, nicht bei jedem Poll."""
+
+
+class AlertEvent(ControllerEntity, EventEntity):
+    """Nur sicherheitsrelevante Einträge (IPS, Admin, HA-Login, externe Quellen)."""
+
+    _attr_event_types = EVENT_TYPES + ["ha_login"]
+    _attr_icon = "mdi:alert-decagram"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "alert_event", "Sicherheit")
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self.hass.bus.async_listen(EVENT_ALERT, self._handle))
+
+    @callback
+    def _handle(self, event: Event) -> None:
+        data = dict(event.data)
+        etype = "ha_login" if data.get("category") == "HA_LOGIN" else event_type(data.get("category"))
+        self._trigger_event(etype, data)
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Nur auf Alarme reagieren."""
 
 
 class Fail2BanEvent(ControllerEntity, EventEntity):
