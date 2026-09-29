@@ -1,4 +1,4 @@
-"""Schalter: WLANs, LED, Lokalisieren, PoE, Client-Sperre, Regeln."""
+"""Schalter: alle Config-Objekte (WLAN, Netze, VPN, FW …), Geräte, Clients."""
 from __future__ import annotations
 
 from typing import Any
@@ -6,16 +6,14 @@ from typing import Any
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import (
-    CONF_CLIENT_SWITCHES,
-    CONF_FIREWALL_POLICIES,
-    CONF_PORTFORWARDS,
-    CONF_TRAFFICRULES,
-)
+from .api import UniFiApiError
+from .const import CONF_CLIENT_SWITCHES, CONF_SWITCH_GROUPS
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
+from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS, SwitchGroup, object_name
 
 
 async def async_setup_entry(
@@ -25,11 +23,14 @@ async def async_setup_entry(
 ) -> None:
     coordinator = entry.runtime_data
     opts = entry.options
+    groups = [g for g in SWITCH_GROUPS if g.key in opts.get(CONF_SWITCH_GROUPS, SWITCH_GROUP_KEYS)]
 
     def factory():
         data = coordinator.data
-        for wlan_id in data.wlans:
-            yield WlanSwitch(coordinator, wlan_id)
+        for group in groups:
+            for obj_id, obj in data.config.get(group.dataset, {}).items():
+                if group.field in obj and group.filter(obj):
+                    yield ResourceSwitch(coordinator, group, obj_id)
         for mac, dev in data.devices.items():
             if "led_override" in dev:
                 yield LedSwitch(coordinator, mac)
@@ -41,51 +42,48 @@ async def async_setup_entry(
             for mac, user in data.users.items():
                 if user.get("name"):
                     yield ClientBlockSwitch(coordinator, mac)
-        if opts.get(CONF_PORTFORWARDS):
-            for rid in data.portforwards:
-                yield RuleSwitch(coordinator, "portforwards", rid)
-        if opts.get(CONF_TRAFFICRULES):
-            for rid in data.trafficrules:
-                yield RuleSwitch(coordinator, "trafficrules", rid)
-        if opts.get(CONF_FIREWALL_POLICIES):
-            for rid, pol in data.firewall_policies.items():
-                if not pol.get("predefined"):
-                    yield RuleSwitch(coordinator, "firewall_policies", rid)
 
     async_add_dynamic(coordinator, async_add_entities, factory)
 
 
-# --------------------------------------------------------------------- WLAN
-class WlanSwitch(ControllerEntity, SwitchEntity):
-    _attr_icon = "mdi:wifi"
+# ------------------------------------------------------------ Config-Objekte
+class ResourceSwitch(ControllerEntity, SwitchEntity):
+    """Schaltet ein Boolean-Feld (meist 'enabled') eines Config-Objekts."""
 
-    def __init__(self, coordinator: UniFiCoordinator, wlan_id: str) -> None:
-        name = coordinator.data.wlans[wlan_id].get("name", wlan_id)
-        super().__init__(coordinator, f"wlan_{wlan_id}", f"WLAN {name}")
-        self._id = wlan_id
+    def __init__(self, coordinator: UniFiCoordinator, group: SwitchGroup, obj_id: str) -> None:
+        obj = coordinator.data.config[group.dataset][obj_id]
+        super().__init__(
+            coordinator, f"{group.uid_prefix}_{obj_id}",
+            f"{group.label} {object_name(obj)}{group.suffix}",
+        )
+        self._group = group
+        self._id = obj_id
+        self._attr_icon = group.icon
 
     @property
-    def _wlan(self) -> dict | None:
-        return self.coordinator.data.wlans.get(self._id)
+    def _obj(self) -> dict | None:
+        return self.coordinator.data.config.get(self._group.dataset, {}).get(self._id)
 
     @property
     def available(self) -> bool:
-        return super().available and self._wlan is not None
+        return super().available and self._obj is not None
 
     @property
     def is_on(self) -> bool:
-        return bool((self._wlan or {}).get("enabled"))
+        return bool((self._obj or {}).get(self._group.field))
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        w = self._wlan or {}
-        return {"ssid": w.get("name"), "security": w.get("security"),
-                "is_guest": w.get("is_guest"), "networkconf_id": w.get("networkconf_id")}
+        obj = self._obj
+        return self._group.attrs(obj, self.coordinator.data.config) if obj else {}
 
-    async def _set(self, enabled: bool) -> None:
-        await self.coordinator.async_command(
-            self.coordinator.client.update_wlan(self._id, {"enabled": enabled})
-        )
+    async def _set(self, value: bool) -> None:
+        try:
+            await self.coordinator.async_update_object(
+                self._group.dataset, self._obj, {self._group.field: value}
+            )
+        except UniFiApiError as err:
+            raise HomeAssistantError(str(err)) from err
 
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._set(True)
@@ -202,49 +200,3 @@ class ClientBlockSwitch(ControllerEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.async_command(
             self.coordinator.client.stamgr("unblock-sta", self._mac))
-
-
-# ------------------------------------------------------------------- Regeln
-RULE_LABEL = {
-    "portforwards": "Portweiterleitung",
-    "trafficrules": "Traffic-Regel",
-    "firewall_policies": "FW-Policy",
-}
-
-
-class RuleSwitch(ControllerEntity, SwitchEntity):
-    _attr_icon = "mdi:shield-lock"
-
-    def __init__(self, coordinator: UniFiCoordinator, kind: str, rule_id: str) -> None:
-        rule = getattr(coordinator.data, kind)[rule_id]
-        label = rule.get("name") or rule.get("description") or rule_id
-        super().__init__(coordinator, f"{kind}_{rule_id}", f"{RULE_LABEL[kind]} {label}")
-        self._kind = kind
-        self._id = rule_id
-
-    @property
-    def _rule(self) -> dict | None:
-        return getattr(self.coordinator.data, self._kind).get(self._id)
-
-    @property
-    def available(self) -> bool:
-        return super().available and self._rule is not None
-
-    @property
-    def is_on(self) -> bool:
-        return bool((self._rule or {}).get("enabled"))
-
-    async def _set(self, enabled: bool) -> None:
-        client = self.coordinator.client
-        setter = {
-            "portforwards": client.set_portforward,
-            "trafficrules": client.set_trafficrule,
-            "firewall_policies": client.set_firewall_policy,
-        }[self._kind]
-        await self.coordinator.async_command(setter(self._rule, enabled))
-
-    async def async_turn_on(self, **kwargs: Any) -> None:
-        await self._set(True)
-
-    async def async_turn_off(self, **kwargs: Any) -> None:
-        await self._set(False)
