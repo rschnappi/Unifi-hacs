@@ -93,7 +93,7 @@ class UniFiClient:
                     if resp.status in (401, 403):
                         raise UniFiAuthError(f"HTTP {resp.status}")
                     if resp.status >= 400:
-                        raise UniFiApiError(f"HTTP {resp.status} {path}: {text[:300]}")
+                        raise UniFiApiError(f"HTTP {resp.status} {path}: {text[:2000]}")
         except (aiohttp.ClientError, TimeoutError) as err:
             raise UniFiApiError(f"Verbindung zu {self.host} fehlgeschlagen: {err}") from err
 
