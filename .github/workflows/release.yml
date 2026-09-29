@@ -1,28 +1,56 @@
 name: Release
+
 on:
   push:
-    branches: [main]
-    paths:
-      - custom_components/unifi_controller/manifest.json
-      - .github/workflows/release.yml
-  workflow_dispatch:
+    tags: ['v*']          # git tag v0.4.0 && git push --tags
+  release:
+    types: [published]    # oder: GitHub → Releases → „Draft a new release“ → neuer Tag → Publish
+
 permissions:
   contents: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+
 jobs:
   release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Version aus manifest.json
+        with:
+          fetch-depth: 0
+
+      - name: Version aus Tag
         id: v
-        run: echo "version=$(jq -r .version custom_components/unifi_controller/manifest.json)" >> "$GITHUB_OUTPUT"
-      - name: Release anlegen, falls neu
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: manifest.json setzen und ZIP bauen
+        run: |
+          cd custom_components/unifi_controller
+          jq --arg v "${{ steps.v.outputs.version }}" '.version = $v' manifest.json > m.tmp && mv m.tmp manifest.json
+          zip -r "$GITHUB_WORKSPACE/unifi_controller.zip" . -x '*__pycache__*'
+
+      - name: Release-Notes aus Commits
+        run: |
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          RANGE=${PREV:+$PREV..}${GITHUB_REF_NAME}
+          {
+            echo "## Änderungen"
+            git log --no-merges --pretty='- %s' "$RANGE" | grep -v -i '^- release ' || true
+            [ -n "$PREV" ] && echo -e "\n**Vergleich:** https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${GITHUB_REF_NAME}"
+          } > notes.md
+
+      - name: Release anlegen bzw. aktualisieren, ZIP anhängen
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: v${{ steps.v.outputs.version }}
+          TAG: ${{ steps.v.outputs.tag }}
         run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "$TAG existiert bereits – nichts zu tun"; exit 0
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" --title "$TAG" --notes-file notes.md --verify-tag
           fi
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+          gh release upload "$TAG" unifi_controller.zip --clobber
