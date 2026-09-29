@@ -16,9 +16,8 @@ from homeassistant.helpers import config_validation as cv
 from .api import UniFiApiError
 from .const import DOMAIN
 from .coordinator import UniFiCoordinator
-from .countries import COUNTRIES
 from .logs import parse_entry
-from .region import ACTIONS, DIRECTIONS, async_set_geo, country_names
+from .region import async_apply, country_names
 from .resources import DATASETS, object_name, redact
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan
 
@@ -167,11 +166,11 @@ def async_setup_services(hass: HomeAssistant) -> None:
     # ------------------------------------------------------------ Länder-Blocking
     async def set_region_blocking(call: ServiceCall) -> ServiceResponse:
         c = _coordinator(hass, call)
-        st = await _run(async_set_geo(
-            c, enabled=call.data.get("enabled"), action=call.data.get("action"),
-            traffic_direction=call.data.get("traffic_direction"),
-            countries=call.data.get("countries"), add=call.data.get("add"),
-            remove=call.data.get("remove")))
+        st = await _run(async_apply(
+            c, enabled=call.data.get("enabled"), countries=call.data.get("countries"),
+            add=call.data.get("add"), remove=call.data.get("remove"),
+            exceptions=call.data.get("exceptions"), zones=call.data.get("zones"),
+            wireguard=call.data.get("wireguard")))
         return {**st, "names": country_names(st["countries"])}
 
     # ------------------------------------------------------------ Aktionen
@@ -284,15 +283,16 @@ def async_setup_services(hass: HomeAssistant) -> None:
         vol.Optional("length", default=24): vol.All(vol.Coerce(int), vol.Range(min=12, max=63)),
         vol.Optional("notify", default=True): cv.boolean,
     }), supports_response=SupportsResponse.OPTIONAL)
-    codes = vol.All(cv.ensure_list, [vol.All(cv.string, vol.Upper, vol.In(list(COUNTRIES)))])
+    codes = vol.All(cv.ensure_list, [vol.All(cv.string, vol.Upper, vol.Length(min=2, max=2))])
     reg(DOMAIN, "set_region_blocking", set_region_blocking, schema=vol.Schema({
         **BASE,
         vol.Optional("enabled"): cv.boolean,
-        vol.Optional("action"): vol.In(ACTIONS),
-        vol.Optional("traffic_direction"): vol.In(DIRECTIONS),
         vol.Optional("countries"): codes,
         vol.Optional("add"): codes,
         vol.Optional("remove"): codes,
+        vol.Optional("exceptions"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("zones"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("wireguard"): cv.boolean,
     }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "get_bans", get_bans, schema=vol.Schema(BASE),
         supports_response=SupportsResponse.ONLY)
