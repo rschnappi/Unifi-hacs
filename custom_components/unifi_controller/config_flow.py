@@ -27,6 +27,8 @@ from .const import (
     CONF_F2B_BANTIME,
     CONF_F2B_CATEGORIES,
     CONF_F2B_FINDTIME,
+    CONF_F2B_HA_LOGIN,
+    CONF_F2B_INSTANT,
     CONF_F2B_MAXRETRY,
     CONF_F2B_WHITELIST,
     CONF_LOG_BACKFILL,
@@ -41,6 +43,7 @@ from .const import (
     DEFAULT_F2B_BANTIME,
     DEFAULT_F2B_CATEGORIES,
     DEFAULT_F2B_FINDTIME,
+    DEFAULT_F2B_INSTANT,
     DEFAULT_F2B_MAXRETRY,
     DEFAULT_HOST,
     DEFAULT_PREFIX,
@@ -220,6 +223,10 @@ class UniFiControllerOptionsFlow(OptionsFlow):
             vol.Required(
                 CONF_F2B_CATEGORIES, default=o.get(CONF_F2B_CATEGORIES, DEFAULT_F2B_CATEGORIES)
             ): str,
+            vol.Required(
+                CONF_F2B_INSTANT, default=o.get(CONF_F2B_INSTANT, DEFAULT_F2B_INSTANT)
+            ): str,
+            vol.Required(CONF_F2B_HA_LOGIN, default=o.get(CONF_F2B_HA_LOGIN, True)): bool,
             vol.Optional(CONF_F2B_WHITELIST, default=o.get(CONF_F2B_WHITELIST, "")): str,
             vol.Required(CONF_BAN_GROUP, default=o.get(CONF_BAN_GROUP, DEFAULT_BAN_GROUP)): str,
         })
