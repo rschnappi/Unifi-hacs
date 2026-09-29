@@ -116,20 +116,11 @@ class UniFiClient:
     async def get_clients(self) -> list[dict]:
         return await self.request("GET", "stat/sta") or []
 
-    async def get_users(self) -> list[dict]:
-        return await self.request("GET", "rest/user") or []
-
-    async def get_wlans(self) -> list[dict]:
-        return await self.request("GET", "rest/wlanconf") or []
-
-    async def get_portforwards(self) -> list[dict]:
-        return await self.request("GET", "rest/portforward") or []
-
-    async def get_trafficrules(self) -> list[dict]:
-        return await self.request("GET", "v2/trafficrules") or []
-
-    async def get_firewall_policies(self) -> list[dict]:
-        return await self.request("GET", "v2/firewall-policies") or []
+    async def list_objects(self, path: str) -> list[dict]:
+        data = await self.request("GET", path)
+        if isinstance(data, dict):
+            data = data.get("data", [])
+        return data or []
 
     # ---------------------------------------------------------------- writes
     async def stamgr(self, cmd: str, mac: str, **extra: Any) -> Any:
@@ -160,24 +151,11 @@ class UniFiClient:
             "PUT", f"rest/device/{device['_id']}", {"port_overrides": overrides}
         )
 
-    async def set_portforward(self, rule: dict, enabled: bool) -> Any:
-        return await self.request(
-            "PUT", f"rest/portforward/{rule['_id']}", {**rule, "enabled": enabled}
-        )
+    async def create_object(self, path: str, body: dict) -> Any:
+        return await self.request("POST", path, body)
 
-    async def set_trafficrule(self, rule: dict, enabled: bool) -> Any:
-        return await self.request(
-            "PUT", f"v2/trafficrules/{rule['_id']}", {**rule, "enabled": enabled}
-        )
+    async def update_object(self, path: str, obj_id: str, body: dict) -> Any:
+        return await self.request("PUT", f"{path}/{obj_id}", body)
 
-    async def set_firewall_policy(self, policy: dict, enabled: bool) -> Any:
-        body = {**policy, "enabled": enabled}
-        try:
-            return await self.request("PUT", f"v2/firewall-policies/{policy['_id']}", body)
-        except UniFiAuthError:
-            raise
-        except UniFiApiError:
-            _LOGGER.debug("Einzel-PUT fehlgeschlagen, versuche Batch-Endpunkt")
-            return await self.request(
-                "PUT", "v2/firewall-policies/batch", [{"_id": policy["_id"], "enabled": enabled}]
-            )
+    async def delete_object(self, path: str, obj_id: str) -> Any:
+        return await self.request("DELETE", f"{path}/{obj_id}")
