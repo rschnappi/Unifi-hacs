@@ -1,4 +1,4 @@
-"""Sensoren: Controller-Health, WAN, Client-Zähler, Netzwerke, Geräte-Stats."""
+"""Sensoren: Controller-Health, WAN, Client-Zähler, Netzwerke, Fail2Ban, Geräte-Stats."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -184,6 +184,7 @@ async def async_setup_entry(
         for net_id, net in data.config.get("networks", {}).items():
             if net.get("purpose") in LAN_PURPOSES | VPN_PURPOSES:
                 yield NetworkClientsSensor(coordinator, net_id)
+        yield BanSensor(coordinator)
         for mac, dev in data.devices.items():
             for desc in DEVICE_SENSORS:
                 if desc.exists_fn(dev):
@@ -276,3 +277,34 @@ class NetworkClientsSensor(ControllerEntity, SensorEntity):
                 "network_isolation_enabled", "vpn_type", "local_port", "id")
         attrs = scalar_attrs(net)
         return {k: attrs[k] for k in keep if k in attrs}
+
+
+class BanSensor(ControllerEntity, SensorEntity):
+    """Anzahl aktuell per Fail2Ban gesperrter IPs (Liste als Attribut)."""
+
+    _attr_icon = "mdi:shield-lock"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "IPs"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "fail2ban_bans", "Fail2Ban gesperrt")
+
+    @property
+    def native_value(self) -> int:
+        logs = self.coordinator.logs
+        return len(logs.bans) if logs else 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        logs = self.coordinator.logs
+        if not logs:
+            return {}
+        return {
+            "bans": logs.ban_list(),
+            "enabled": logs.f2b,
+            "group": logs.group_name,
+            "maxretry": logs.maxretry,
+            "findtime_s": logs.findtime,
+            "bantime_min": logs.bantime,
+            "log_error": logs.last_error,
+        }
