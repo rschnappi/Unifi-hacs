@@ -1,10 +1,11 @@
-"""DataUpdateCoordinator: holt alle Controller-Daten in einem Zyklus."""
+"""DataUpdateCoordinator: schnelle Statistik + langsamere Konfiguration."""
 from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
 from datetime import timedelta
 import logging
+import time
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
@@ -16,12 +17,12 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .api import UniFiApiError, UniFiAuthError, UniFiClient
 from .const import (
     CONF_CLIENT_SWITCHES,
-    CONF_FIREWALL_POLICIES,
-    CONF_PORTFORWARDS,
-    CONF_TRAFFICRULES,
+    CONF_CONFIG_INTERVAL,
+    DEFAULT_CONFIG_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
+from .resources import DATASETS, OPTIONAL_DATASETS, VOLATILE
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -33,14 +34,17 @@ class UniFiData:
     """Momentaufnahme des Controllers, jeweils nach Schlüssel indiziert."""
 
     sysinfo: dict[str, Any] = field(default_factory=dict)
-    health: dict[str, dict] = field(default_factory=dict)      # subsystem -> dict
-    devices: dict[str, dict] = field(default_factory=dict)     # mac -> dict
-    clients: dict[str, dict] = field(default_factory=dict)     # mac -> dict (online)
-    users: dict[str, dict] = field(default_factory=dict)       # mac -> dict (bekannt)
-    wlans: dict[str, dict] = field(default_factory=dict)       # _id -> dict
-    portforwards: dict[str, dict] = field(default_factory=dict)
-    trafficrules: dict[str, dict] = field(default_factory=dict)
-    firewall_policies: dict[str, dict] = field(default_factory=dict)
+    health: dict[str, dict] = field(default_factory=dict)    # subsystem -> dict
+    devices: dict[str, dict] = field(default_factory=dict)   # mac -> dict
+    clients: dict[str, dict] = field(default_factory=dict)   # mac -> dict (online)
+    config: dict[str, dict[str, dict]] = field(default_factory=dict)  # dataset -> _id -> obj
+
+    @property
+    def users(self) -> dict[str, dict]:
+        """Bekannte Clients nach MAC."""
+        return {
+            str(u["mac"]).lower(): u for u in self.config.get("users", {}).values() if u.get("mac")
+        }
 
 
 def _index(items: list[dict] | None, key: str) -> dict[str, dict]:
@@ -52,8 +56,6 @@ def _index(items: list[dict] | None, key: str) -> dict[str, dict]:
 
 
 class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
-    """Pollt Controller; optionale Kategorien laut Optionen."""
-
     config_entry: UniFiConfigEntry
 
     def __init__(self, hass: HomeAssistant, entry: UniFiConfigEntry, client: UniFiClient) -> None:
@@ -67,67 +69,93 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
             ),
         )
         self.client = client
+        self._config_interval = entry.options.get(CONF_CONFIG_INTERVAL, DEFAULT_CONFIG_INTERVAL)
+        self._last_config = 0.0
+        self._force_config = True
+        self._failed: set[str] = set()
+
+    @property
+    def datasets(self) -> dict[str, str]:
+        with_users = self.config_entry.options.get(CONF_CLIENT_SWITCHES, False)
+        return {
+            k: p for k, p in DATASETS.items() if k not in OPTIONAL_DATASETS or with_users
+        }
 
     async def _async_update_data(self) -> UniFiData:
-        opts = self.config_entry.options
         prev = self.data or UniFiData()
+        try:
+            sysinfo, health, devices, clients = await asyncio.gather(
+                self.client.get_sysinfo(),
+                self.client.get_health(),
+                self.client.get_devices(),
+                self.client.get_clients(),
+            )
+        except UniFiAuthError as err:
+            raise ConfigEntryAuthFailed("API-Key abgelehnt") from err
+        except UniFiApiError as err:
+            raise UpdateFailed(str(err)) from err
 
-        required = {
-            "sysinfo": self.client.get_sysinfo(),
-            "health": self.client.get_health(),
-            "devices": self.client.get_devices(),
-            "clients": self.client.get_clients(),
-            "wlans": self.client.get_wlans(),
-        }
-        optional: dict[str, Any] = {}
-        if opts.get(CONF_CLIENT_SWITCHES):
-            optional["users"] = self.client.get_users()
-        if opts.get(CONF_PORTFORWARDS):
-            optional["portforwards"] = self.client.get_portforwards()
-        if opts.get(CONF_TRAFFICRULES):
-            optional["trafficrules"] = self.client.get_trafficrules()
-        if opts.get(CONF_FIREWALL_POLICIES):
-            optional["firewall_policies"] = self.client.get_firewall_policies()
+        config = prev.config
+        now = time.monotonic()
+        if self._force_config or now - self._last_config >= self._config_interval:
+            config = await self._fetch_config(prev.config)
+            self._last_config = now
+            self._force_config = False
 
-        keys = list(required) + list(optional)
-        results = await asyncio.gather(
-            *required.values(), *optional.values(), return_exceptions=True
+        return UniFiData(
+            sysinfo=sysinfo or {},
+            health=_index(health, "subsystem"),
+            devices=_index(devices, "mac"),
+            clients=_index(clients, "mac"),
+            config=config,
         )
-        raw: dict[str, Any] = {}
+
+    async def _fetch_config(self, prev: dict[str, dict[str, dict]]) -> dict[str, dict[str, dict]]:
+        keys = list(self.datasets)
+        results = await asyncio.gather(
+            *(self.client.list_objects(self.datasets[k]) for k in keys), return_exceptions=True
+        )
+        out: dict[str, dict[str, dict]] = {}
         for key, res in zip(keys, results, strict=True):
             if isinstance(res, UniFiAuthError):
                 raise ConfigEntryAuthFailed("API-Key abgelehnt") from res
             if isinstance(res, BaseException):
-                if key in required:
-                    raise UpdateFailed(f"{key}: {res}") from res
-                _LOGGER.warning("Optionale Kategorie %s fehlgeschlagen: %s", key, res)
-                raw[key] = None
+                if key not in self._failed:
+                    _LOGGER.warning("Dataset %s nicht verfügbar: %s", key, res)
+                    self._failed.add(key)
+                out[key] = prev.get(key, {})
                 continue
-            raw[key] = res
+            self._failed.discard(key)
+            out[key] = _index(res, "_id")
+        return out
 
-        def keep(key: str, new: dict[str, dict]) -> dict[str, dict]:
-            return getattr(prev, key) if raw.get(key) is None and key in optional else new
+    def find(self, dataset: str, ident: str) -> dict:
+        """Objekt per _id oder eindeutigem Namen finden."""
+        from .resources import object_name  # noqa: PLC0415
 
-        return UniFiData(
-            sysinfo=raw["sysinfo"] or {},
-            health=_index(raw["health"], "subsystem"),
-            devices=_index(raw["devices"], "mac"),
-            clients=_index(raw["clients"], "mac"),
-            wlans=_index(raw["wlans"], "_id"),
-            users=keep("users", _index(raw.get("users"), "mac")),
-            portforwards=keep("portforwards", _index(raw.get("portforwards"), "_id")),
-            trafficrules=keep("trafficrules", _index(raw.get("trafficrules"), "_id")),
-            firewall_policies=keep(
-                "firewall_policies", _index(raw.get("firewall_policies"), "_id")
-            ),
+        objs = (self.data.config if self.data else {}).get(dataset, {})
+        if ident in objs:
+            return objs[ident]
+        hits = [o for o in objs.values() if object_name(o).lower() == ident.strip().lower()]
+        if len(hits) == 1:
+            return hits[0]
+        raise UniFiApiError(
+            f"{dataset}: '{ident}' " + ("mehrdeutig" if hits else "nicht gefunden")
+        )
+
+    async def async_update_object(self, dataset: str, obj: dict, changes: dict) -> Any:
+        body = {k: v for k, v in obj.items() if k not in VOLATILE} | changes
+        return await self.async_command(
+            self.client.update_object(DATASETS[dataset], obj["_id"], body)
         )
 
     async def async_command(self, coro) -> Any:
-        """Schreibbefehl ausführen und danach neu laden."""
+        """Schreibbefehl ausführen und danach sofort alles neu laden."""
         try:
             result = await coro
         except UniFiAuthError as err:
             self.config_entry.async_start_reauth(self.hass)
             raise UniFiApiError("API-Key abgelehnt") from err
-        await self.async_request_refresh()
+        self._force_config = True
+        await self.async_refresh()
         return result
