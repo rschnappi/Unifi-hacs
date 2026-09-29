@@ -73,6 +73,7 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         self._last_config = 0.0
         self._force_config = True
         self._failed: set[str] = set()
+        self.logs: Any = None  # LogManager, wird in __init__.py gesetzt
 
     @property
     def datasets(self) -> dict[str, str]:
@@ -102,13 +103,16 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
             self._last_config = now
             self._force_config = False
 
-        return UniFiData(
+        data = UniFiData(
             sysinfo=sysinfo or {},
             health=_index(health, "subsystem"),
             devices=_index(devices, "mac"),
             clients=_index(clients, "mac"),
             config=config,
         )
+        if self.logs is not None:
+            await self.logs.async_poll()
+        return data
 
     async def _fetch_config(self, prev: dict[str, dict[str, dict]]) -> dict[str, dict[str, dict]]:
         keys = list(self.datasets)
