@@ -1,4 +1,4 @@
-"""Binärsensoren: Gerät online, Update verfügbar, Internet."""
+"""Binärsensoren: Gerät online, Update verfügbar, Internet, Fail2Ban aktiv."""
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
@@ -22,6 +22,8 @@ async def async_setup_entry(
 
     def factory():
         yield InternetSensor(coordinator)
+        if coordinator.logs:
+            yield Fail2BanActive(coordinator)
         for mac in coordinator.data.devices:
             yield DeviceOnline(coordinator, mac)
             yield DeviceUpgradable(coordinator, mac)
@@ -62,3 +64,24 @@ class DeviceUpgradable(DeviceEntity, BinarySensorEntity):
     @property
     def is_on(self) -> bool:
         return bool((self.device or {}).get("upgradable"))
+
+
+class Fail2BanActive(ControllerEntity, BinarySensorEntity):
+    _attr_icon = "mdi:shield-check"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "fail2ban_active", "Fail2Ban aktiv")
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self.coordinator.logs.f2b)
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        logs = self.coordinator.logs
+        return {
+            "maxretry": logs.maxretry, "findtime_s": logs.findtime, "bantime_min": logs.bantime,
+            "categories": sorted(logs.categories), "instant_events": sorted(logs.instant),
+            "ha_login": logs.ha_login, "group": logs.group_name,
+            "whitelist": [str(n) for n in logs.whitelist], "log_error": logs.last_error,
+        }
