@@ -24,7 +24,7 @@ from homeassistant.util import dt as dt_util
 
 from .coordinator import UniFiConfigEntry, UniFiCoordinator, UniFiData
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
-from .region import country_names, geo_setting, geo_state
+from .region import country_names, state as region_state, zone_id
 from .resources import LAN_PURPOSES, VPN_PURPOSES, object_name, scalar_attrs
 
 STAT_SENSORS = (
@@ -213,7 +213,7 @@ async def async_setup_entry(
                 yield StatSensor(coordinator, key, name, icon)
             yield LastAlertSensor(coordinator)
             yield LastBanSensor(coordinator)
-        if geo_setting(data) is not None:
+        if zone_id(data, "external"):
             yield RegionSensor(coordinator)
         for mac, dev in data.devices.items():
             for desc in DEVICE_SENSORS:
@@ -393,19 +393,19 @@ class LastBanSensor(ControllerEntity, SensorEntity):
 
 
 class RegionSensor(ControllerEntity, SensorEntity):
-    """Anzahl der Länder im Länder-Blocking, Liste als Attribut."""
+    """Anzahl erlaubter Länder im Länder-Blocking, Details als Attribute."""
 
     _attr_icon = "mdi:earth-off"
     _attr_native_unit_of_measurement = "Länder"
 
     def __init__(self, coordinator: UniFiCoordinator) -> None:
-        super().__init__(coordinator, "region_countries", "Länder-Blocking Länder")
+        super().__init__(coordinator, "region_countries", "Länder-Blocking erlaubte Länder")
 
     @property
     def native_value(self) -> int:
-        return len(geo_state(geo_setting(self.coordinator.data))["countries"])
+        return len(region_state(self.coordinator.data)["countries"])
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        st = geo_state(geo_setting(self.coordinator.data))
+        st = region_state(self.coordinator.data)
         return {**st, "names": country_names(st["countries"])}
