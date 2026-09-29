@@ -44,6 +44,8 @@ CONF_F2B_WHITELIST = "f2b_whitelist"
 CONF_BAN_GROUP = "ban_group"
 CONF_F2B_INSTANT = "f2b_instant_events"
 CONF_F2B_HA_LOGIN = "f2b_ha_login"
+CONF_F2B_BANTIME_INSTANT = "f2b_bantime_instant"
+CONF_F2B_RECIDIVE = "f2b_recidive"
 
 DEFAULT_LOG_FILE = ""
 DEFAULT_F2B_MAXRETRY = 5
@@ -52,6 +54,8 @@ DEFAULT_F2B_BANTIME = 60        # min, 0 = dauerhaft
 DEFAULT_F2B_CATEGORIES = "SECURITY"
 DEFAULT_BAN_GROUP = "HA Fail2Ban"
 DEFAULT_F2B_INSTANT = "THREAT_BLOCKED,THREAT_DETECTED"
+DEFAULT_F2B_BANTIME_INSTANT = 1440   # min
+DEFAULT_F2B_RECIDIVE = 3             # ab der n-ten Sperre dauerhaft, 0 = aus
 BAN_PLACEHOLDER = "192.0.2.1"   # TEST-NET-1, hält die Gruppe nicht leer
 
 EVENT_LOG = f"{DOMAIN}_log"
