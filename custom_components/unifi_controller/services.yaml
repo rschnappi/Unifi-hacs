@@ -174,25 +174,27 @@ set_region_blocking:
     enabled:
       selector:
         boolean: {}
-    action:
-      selector:
-        select:
-          options: [block, allow]
-    traffic_direction:
-      selector:
-        select:
-          options: [both, ingress, egress]
     countries:
-      example: '["CN", "RU", "KP"]'
+      example: '["AT", "DE", "CH", "SI", "HR"]'
       selector:
         object: {}
     add:
-      example: '["IR"]'
+      example: '["IT"]'
       selector:
         object: {}
     remove:
       selector:
         object: {}
+    exceptions:
+      example: '["160.79.104.0/21"]'
+      selector:
+        object: {}
+    zones:
+      selector:
+        object: {}
+    wireguard:
+      selector:
+        boolean: {}
 block_client:
   fields:
     config_entry_id: *id001
