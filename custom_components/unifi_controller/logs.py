@@ -38,6 +38,7 @@ from .const import (
     DEFAULT_F2B_INSTANT,
     DEFAULT_F2B_MAXRETRY,
     DOMAIN,
+    EVENT_ALERT,
     EVENT_BAN,
     EVENT_LOG,
 )
@@ -54,6 +55,8 @@ MAX_PAGES = 5
 HA_LOGIN_NOTIFICATION = "http-login"
 _IP_IN_PARENS = re.compile(r"\(([0-9A-Fa-f:.]+)\)")
 _ANY_IP = re.compile(r"[0-9A-Fa-f:.]{7,}")
+
+STAT_KEYS = ("events", "security", "threats", "fw_blocks", "ha_login", "bans")
 
 EVENT_TYPES = ["security", "client", "device", "admin", "vpn", "system", "other"]
 
@@ -73,6 +76,21 @@ def event_type(category: str | None) -> str:
     if c in {"SYSTEM", "UPDATES", "UPDATE", "INTERNET", "POWER"}:
         return "system"
     return "other"
+
+
+def is_alert(entry: dict) -> bool:
+    """Sicherheitsrelevant: IPS, Admin, HA-Login oder Security-Event von öffentlicher IP."""
+    event = (entry.get("event") or "").upper()
+    cat = (entry.get("category") or "").upper()
+    if event.startswith("THREAT") or cat.startswith("ADMIN") or cat == "HA_LOGIN":
+        return True
+    ip = entry.get("src_ip")
+    if cat == "SECURITY" and ip:
+        try:
+            return ipaddress.ip_address(ip).is_global
+        except ValueError:
+            return False
+    return False
 
 
 def _is_ip(value: Any) -> bool:
@@ -162,10 +180,57 @@ class LogManager:
         self._store: Store = Store(hass, 1, f"{DOMAIN}.{coordinator.config_entry.entry_id}.bans")
         self.bans: dict[str, dict[str, Any]] = {}
         self.last_error: str | None = None
+        self.last_alert: dict[str, Any] | None = None
+        self.last_ban: dict[str, Any] | None = None
+        self.stats: dict[str, Any] = self._empty_stats()
+
+    # -------------------------------------------------------------- Zähler
+    @staticmethod
+    def _empty_stats() -> dict[str, Any]:
+        return {"date": dt_util.now().date().isoformat(), **{k: 0 for k in STAT_KEYS}}
+
+    def _count(self, key: str) -> None:
+        today = dt_util.now().date().isoformat()
+        if self.stats.get("date") != today:
+            self.stats = self._empty_stats()
+        self.stats[key] = self.stats.get(key, 0) + 1
+
+    def stat(self, key: str) -> int:
+        if self.stats.get("date") != dt_util.now().date().isoformat():
+            return 0
+        return int(self.stats.get(key, 0))
+
+    def _save(self) -> None:
+        self._store.async_delay_save(
+            lambda: {"bans": self.bans, "stats": self.stats, "last_alert": self.last_alert,
+                     "last_ban": self.last_ban}, 10)
+
+    @callback
+    def _record(self, entry: dict) -> None:
+        """Zähler + Alarmierung für einen Eintrag."""
+        self._count("events")
+        cat = (entry.get("category") or "").upper()
+        event = (entry.get("event") or "").upper()
+        if cat == "SECURITY":
+            self._count("security")
+        if event.startswith("THREAT"):
+            self._count("threats")
+        if event == "BLOCKED_BY_FIREWALL":
+            self._count("fw_blocks")
+        if cat == "HA_LOGIN":
+            self._count("ha_login")
+        if is_alert(entry):
+            self.last_alert = {k: v for k, v in entry.items() if v is not None and k != "id"}
+            self.hass.bus.async_fire(EVENT_ALERT, self.last_alert)
+        self._save()
 
     # -------------------------------------------------------------- Setup
     async def async_setup(self) -> None:
-        self.bans = (await self._store.async_load() or {}).get("bans", {})
+        stored = await self._store.async_load() or {}
+        self.bans = stored.get("bans", {})
+        self.stats = stored.get("stats") or self._empty_stats()
+        self.last_alert = stored.get("last_alert")
+        self.last_ban = stored.get("last_ban")
         if self.enabled and self.log_file:
             self._writer = await self.hass.async_add_executor_job(self._open_file)
         if self.f2b and self.ha_login:
@@ -199,7 +264,9 @@ class LogManager:
             "timestamp": dt_util.utcnow().isoformat(),
         }
         self.hass.bus.async_fire(EVENT_LOG, entry)
+        self._record(entry)
         self._check_f2b(entry, force_category=True)
+        self.coordinator.async_update_listeners()
 
     def _open_file(self) -> logging.Logger:
         os.makedirs(os.path.dirname(self.log_file) or ".", exist_ok=True)
@@ -267,6 +334,7 @@ class LogManager:
             for cb in list(self._listeners):
                 cb(entry)
             lines.append(self._format(entry))
+            self._record(entry)
             self._check_f2b(entry)
         if lines and self._writer:
             await self.hass.async_add_executor_job(self._write, lines)
@@ -368,7 +436,10 @@ class LogManager:
         now = time.time()
         self.bans[ip] = {"since": now, "until": now + minutes * 60 if minutes else None,
                          "reason": reason}
-        await self._store.async_save({"bans": self.bans})
+        self._count("bans")
+        self.last_ban = {"ip": ip, "reason": reason, "minutes": minutes,
+                         "time": dt_util.utcnow().isoformat()}
+        self._save()
         _LOGGER.warning("Fail2Ban: %s gesperrt (%s)", ip, reason)
         self.hass.bus.async_fire(EVENT_BAN, {"action": "ban", "ip": ip, "reason": reason,
                                              "minutes": minutes})
@@ -377,7 +448,7 @@ class LogManager:
     async def async_unban(self, ip: str) -> None:
         had = self.bans.pop(ip, None) is not None
         if had:
-            await self._store.async_save({"bans": self.bans})
+            self._save()
         try:
             group = await self._group()
             if group is not None and ip in group.get("group_members", []):
