@@ -9,17 +9,18 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
 from homeassistant.const import CONF_HOST, CONF_SCAN_INTERVAL, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .api import UniFiApiError, UniFiAuthError, UniFiClient, async_load_secret
 from .const import (
     CONF_CLIENT_SWITCHES,
-    CONF_FIREWALL_POLICIES,
-    CONF_PORTFORWARDS,
+    CONF_CONFIG_INTERVAL,
     CONF_PREFIX,
     CONF_SECRET_NAME,
     CONF_SITE,
-    CONF_TRAFFICRULES,
+    CONF_SWITCH_GROUPS,
+    DEFAULT_CONFIG_INTERVAL,
     DEFAULT_HOST,
     DEFAULT_PREFIX,
     DEFAULT_SCAN_INTERVAL,
@@ -27,6 +28,20 @@ from .const import (
     DEFAULT_SITE,
     DOMAIN,
 )
+from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS
+
+GROUP_LABELS = {
+    "wlans": "WLANs",
+    "networks": "Netzwerke/VLANs (aktiv)",
+    "networks_internet": "Netzwerke/VLANs (Internetzugang)",
+    "vpn": "VPN-Server/-Clients",
+    "firewall_policies": "Firewall-Policies (eigene)",
+    "trafficrules": "Traffic-Regeln",
+    "trafficroutes": "Traffic-Routen",
+    "portforwards": "Portweiterleitungen",
+    "routes": "Statische Routen",
+    "dns_records": "DNS-Einträge",
+}
 
 
 async def _validate(hass: HomeAssistant, data: Mapping[str, Any]) -> dict[str, Any]:
@@ -109,9 +124,12 @@ class UniFiControllerOptionsFlow(OptionsFlow):
             vol.Required(
                 CONF_SCAN_INTERVAL, default=o.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL)
             ): vol.All(vol.Coerce(int), vol.Range(min=10, max=600)),
+            vol.Required(
+                CONF_CONFIG_INTERVAL, default=o.get(CONF_CONFIG_INTERVAL, DEFAULT_CONFIG_INTERVAL)
+            ): vol.All(vol.Coerce(int), vol.Range(min=30, max=3600)),
+            vol.Required(
+                CONF_SWITCH_GROUPS, default=o.get(CONF_SWITCH_GROUPS, SWITCH_GROUP_KEYS)
+            ): cv.multi_select({g.key: GROUP_LABELS.get(g.key, g.key) for g in SWITCH_GROUPS}),
             vol.Required(CONF_CLIENT_SWITCHES, default=o.get(CONF_CLIENT_SWITCHES, False)): bool,
-            vol.Required(CONF_PORTFORWARDS, default=o.get(CONF_PORTFORWARDS, False)): bool,
-            vol.Required(CONF_TRAFFICRULES, default=o.get(CONF_TRAFFICRULES, False)): bool,
-            vol.Required(CONF_FIREWALL_POLICIES, default=o.get(CONF_FIREWALL_POLICIES, False)): bool,
         })
         return self.async_show_form(step_id="init", data_schema=schema)
