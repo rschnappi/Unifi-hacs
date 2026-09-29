@@ -1,39 +1,57 @@
 # UniFi Controller Manager
 
-Home-Assistant-Integration (HACS) zur Verwaltung eines UniFi Network Controllers (UniFi OS: UDM/UCG/UDR/Cloud Key Gen2+) über einen **API-Key**.
-Der Key wird zur Laufzeit aus `secrets.yaml` gelesen und **nie** im Config-Entry gespeichert.
+Home-Assistant-Integration (HACS) zur **vollständigen** Verwaltung eines UniFi Network Controllers (UniFi OS: UDM/UCG/UDR/Cloud Key Gen2+, Network 9+/10+ mit zonenbasierter Firewall) über einen **API-Key**.
+Der Key wird zur Laufzeit aus `secrets.yaml` gelesen und **nie** im Config-Entry gespeichert. Passwörter/Keys (`x_*`-Felder) landen weder in Attributen noch in Service-Antworten (außer mit `include_secrets: true`).
 
 ## Installation
 1. HACS → Benutzerdefinierte Repositories → dieses Repo (Typ *Integration*)
 2. „UniFi Controller Manager“ installieren, HA neu starten
-3. In `secrets.yaml`: `unifi_api_key: "<key>"` (UniFi → Einstellungen → Control Plane → Integrationen → API-Key)
-4. Einstellungen → Geräte & Dienste → Integration hinzufügen → *UniFi Controller Manager*
-
-Key-Rotation: neuen Key in `secrets.yaml` eintragen, Integration neu laden.
+3. `secrets.yaml`: `unifi_api_key: "<key>"` (UniFi → Einstellungen → Control Plane → Integrationen)
+4. Geräte & Dienste → Integration hinzufügen → *UniFi Controller Manager*
 
 ## Entitäten
 | Bereich | Entitäten |
 |---|---|
-| Controller | Internet, WAN IP/Download/Upload/Latenz, Status je Subsystem (WAN/LAN/WLAN/WWW/VPN), Clients online/WLAN/LAN/Gäste, Version |
-| WLANs | Schalter je WLAN |
-| Geräte | Online, Firmware-Update, CPU, Speicher, Temperatur, Clients, Durchsatz, Gestartet, Firmware, IP, LED, Lokalisieren*, Neustart |
-| Switch-Ports | PoE-Schalter*, Power-Cycle-Button* |
-| Optional | Client-Sperre (benannte Clients), Portweiterleitungen, Traffic-Regeln, Firewall-Policies (Zonen-FW) |
+| Controller | Internet, WAN IP/Download/Upload/Latenz, Status je Subsystem, Clients online/WLAN/LAN/Gäste, Version |
+| Netzwerke/VLANs | Schalter *aktiv*, Schalter *Internetzugang*, Sensor *Clients* (VLAN, Subnetz, DHCP als Attribute) |
+| VPN | Schalter je VPN-Server/-Client (WireGuard, OpenVPN, Site-to-Site), Sensor *Clients* |
+| Firewall | Schalter je eigener Policy (Quell-/Zielzone, IPs, Ports als Attribute) |
+| Traffic | Schalter je Traffic-Regel und Traffic-Route |
+| Sonstiges | Portweiterleitungen, statische Routen, DNS-Einträge, WLANs |
+| Geräte | Online, Firmware-Update, CPU, Speicher, Temperatur, Clients, IP, Neustart, LED, Lokalisieren*, PoE*, Power-Cycle* |
 
-\* standardmäßig deaktiviert. Neue Geräte/WLANs/Regeln erscheinen automatisch.
+\* standardmäßig deaktiviert. Neue Objekte erscheinen automatisch; welche Schaltergruppen angelegt werden, ist in den Optionen wählbar.
 
-## Services
-`unifi_controller.api_request` (mit Response) für **jeden** API-Endpunkt:
+## Services – alles steuerbar
+Ressourcen: `networks`, `wlans`, `firewall_policies`, `firewall_zones`, `firewall_groups`, `trafficrules`, `trafficroutes`, `portforwards`, `routes`, `dns_records`, `port_profiles`, `usergroups`, `users`
+
 ```yaml
-action: unifi_controller.api_request
+# lesen
+action: unifi_controller.get_objects
+data: {resource: firewall_policies, filter: Sperre}
+response_variable: fw
+
+# ändern (nur angegebene Felder, Rest bleibt erhalten)
+action: unifi_controller.update_object
 data:
-  method: GET
-  path: rest/networkconf        # Legacy: /api/s/<site>/…
-  # path: v2/firewall-zones     # v2-API
-  # path: integration/sites     # offizielle Integration-API
+  resource: networks
+  object: IoT              # Name oder _id
+  changes: {internet_access_enabled: false}
+
+# aktivieren/deaktivieren
+action: unifi_controller.set_enabled
+data: {resource: firewall_policies, object: Sperre Benjamin Internet, enabled: true}
+
+# anlegen / löschen
+action: unifi_controller.create_object
+data: {resource: dns_records, data: {key: nas.local, record_type: A, value: 192.168.10.5, enabled: true}}
+
+# alles andere: roher API-Zugriff (Legacy, v2/…, integration/…)
+action: unifi_controller.api_request
+data: {method: GET, path: v2/firewall/zone}
 response_variable: result
 ```
-Außerdem: `block_client`, `unblock_client`, `reconnect_client`, `authorize_guest`, `restart_device`, `power_cycle_port`, `set_wlan` (aktivieren/deaktivieren/Passwort).
+Außerdem: `block_client`, `unblock_client`, `reconnect_client`, `forget_client`, `authorize_guest`, `unauthorize_guest`, `restart_device`, `power_cycle_port`, `set_wlan`, `refresh`.
 
 ## Optionen
-Namenspräfix (Standard `Netz`), Abfrageintervall, optionale Kategorien.
+Namenspräfix (Standard `Netz`), Abfrageintervall Statistik (30 s) und Konfiguration (120 s; nach jedem Schreibzugriff sofort), Schaltergruppen, Client-Sperr-Schalter.
