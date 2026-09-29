@@ -1,6 +1,8 @@
-"""Services: generische CRUD-Operationen für alle Config-Objekte + Aktionen."""
+"""Services: generische CRUD-Operationen, Logs/Fail2Ban, Secret-Rotation, Aktionen."""
 from __future__ import annotations
 
+import ipaddress
+import time
 from typing import Any
 
 import voluptuous as vol
@@ -13,7 +15,9 @@ from homeassistant.helpers import config_validation as cv
 from .api import UniFiApiError
 from .const import DOMAIN
 from .coordinator import UniFiCoordinator
+from .logs import parse_entry
 from .resources import DATASETS, object_name, redact
+from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan
 
 ATTR_ENTRY = "config_entry_id"
 ATTR_MAC = "mac"
@@ -23,6 +27,13 @@ ATTR_OBJECT = "object"
 BASE = {vol.Optional(ATTR_ENTRY): cv.string}
 MAC_SCHEMA = vol.Schema({**BASE, vol.Required(ATTR_MAC): cv.string})
 RESOURCE = vol.In(list(DATASETS))
+
+
+def _valid_ip(value: str) -> str:
+    try:
+        return str(ipaddress.ip_address(value.strip()))
+    except ValueError as err:
+        raise vol.Invalid(f"Keine gültige IP: {value}") from err
 
 
 def _coordinator(hass: HomeAssistant, call: ServiceCall) -> UniFiCoordinator:
@@ -106,6 +117,46 @@ def async_setup_services(hass: HomeAssistant) -> None:
         c = _coordinator(hass, call)
         c._force_config = True  # noqa: SLF001
         await c.async_refresh()
+
+    # ------------------------------------------------------------ Logs / Fail2Ban
+    async def get_logs(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        now = int(time.time() * 1000)
+        res = await _run(c.logs.fetch(
+            now - call.data["hours"] * 3_600_000, now, 0, call.data["limit"]))
+        entries = [parse_entry(i) for i in res.get("data") or []]
+        if cat := call.data.get("category"):
+            entries = [e for e in entries if (e["category"] or "").upper() == cat.upper()]
+        if text := call.data.get("filter"):
+            entries = [e for e in entries if text.lower() in (e["message"] or "").lower()]
+        return {"total": res.get("total_element_count"), "count": len(entries),
+                "entries": entries}
+
+    async def ban_ip(call: ServiceCall) -> None:
+        c = _coordinator(hass, call)
+        await _run(c.logs.async_ban(
+            call.data["ip"], call.data.get("minutes"), call.data.get("reason", "manuell")))
+
+    async def unban_ip(call: ServiceCall) -> None:
+        c = _coordinator(hass, call)
+        await _run(c.logs.async_unban(call.data["ip"]))
+
+    async def get_bans(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        return {"group": c.logs.group_name, "bans": c.logs.ban_list()}
+
+    # ------------------------------------------------------------ Secrets
+    async def regenerate_vpn_key(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        net = _find(c, "networks", call.data["vpn"])
+        return await _run(async_rotate_wireguard(c, net))
+
+    async def regenerate_wlan_password(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        wlan = _find(c, "wlans", call.data["wlan"])
+        res = await _run(async_rotate_wlan(
+            c, wlan, call.data["length"], notify=call.data["notify"]))
+        return res if call.return_response else {k: v for k, v in res.items() if k != "passphrase"}
 
     # ------------------------------------------------------------ Aktionen
     async def stamgr(cmd: str, call: ServiceCall, **extra: Any) -> None:
@@ -194,6 +245,31 @@ def async_setup_services(hass: HomeAssistant) -> None:
         vol.Required("enabled"): cv.boolean,
     }))
     reg(DOMAIN, "refresh", refresh, schema=vol.Schema(BASE))
+    reg(DOMAIN, "get_logs", get_logs, schema=vol.Schema({
+        **BASE,
+        vol.Optional("hours", default=24): vol.All(vol.Coerce(int), vol.Range(min=1, max=720)),
+        vol.Optional("limit", default=100): vol.All(vol.Coerce(int), vol.Range(min=1, max=1000)),
+        vol.Optional("category"): cv.string,
+        vol.Optional("filter"): cv.string,
+    }), supports_response=SupportsResponse.ONLY)
+    reg(DOMAIN, "ban_ip", ban_ip, schema=vol.Schema({
+        **BASE,
+        vol.Required("ip"): vol.All(cv.string, _valid_ip),
+        vol.Optional("minutes"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("reason"): cv.string,
+    }))
+    reg(DOMAIN, "unban_ip", unban_ip, schema=vol.Schema({
+        **BASE, vol.Required("ip"): vol.All(cv.string, _valid_ip)}))
+    reg(DOMAIN, "regenerate_vpn_key", regenerate_vpn_key, schema=vol.Schema({
+        **BASE, vol.Required("vpn"): cv.string}), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "regenerate_wlan_password", regenerate_wlan_password, schema=vol.Schema({
+        **BASE,
+        vol.Required("wlan"): cv.string,
+        vol.Optional("length", default=24): vol.All(vol.Coerce(int), vol.Range(min=12, max=63)),
+        vol.Optional("notify", default=True): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "get_bans", get_bans, schema=vol.Schema(BASE),
+        supports_response=SupportsResponse.ONLY)
     for name, func in (
         ("block_client", block_client),
         ("unblock_client", unblock_client),
