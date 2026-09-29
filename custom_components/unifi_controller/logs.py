@@ -12,7 +12,7 @@ import os
 import time
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import Context, HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
@@ -22,21 +22,25 @@ from .const import (
     CONF_BAN_GROUP,
     CONF_F2B,
     CONF_F2B_BANTIME,
+    CONF_F2B_BANTIME_INSTANT,
     CONF_F2B_CATEGORIES,
     CONF_F2B_FINDTIME,
     CONF_F2B_HA_LOGIN,
     CONF_F2B_INSTANT,
     CONF_F2B_MAXRETRY,
+    CONF_F2B_RECIDIVE,
     CONF_F2B_WHITELIST,
     CONF_LOG_BACKFILL,
     CONF_LOG_FILE,
     CONF_LOGS,
     DEFAULT_BAN_GROUP,
     DEFAULT_F2B_BANTIME,
+    DEFAULT_F2B_BANTIME_INSTANT,
     DEFAULT_F2B_CATEGORIES,
     DEFAULT_F2B_FINDTIME,
     DEFAULT_F2B_INSTANT,
     DEFAULT_F2B_MAXRETRY,
+    DEFAULT_F2B_RECIDIVE,
     DOMAIN,
     EVENT_ALERT,
     EVENT_BAN,
@@ -156,6 +160,9 @@ class LogManager:
         self.maxretry: int = opts.get(CONF_F2B_MAXRETRY, DEFAULT_F2B_MAXRETRY)
         self.findtime: int = opts.get(CONF_F2B_FINDTIME, DEFAULT_F2B_FINDTIME)
         self.bantime: int = opts.get(CONF_F2B_BANTIME, DEFAULT_F2B_BANTIME)
+        self.bantime_instant: int = opts.get(CONF_F2B_BANTIME_INSTANT, DEFAULT_F2B_BANTIME_INSTANT)
+        self.recidive: int = opts.get(CONF_F2B_RECIDIVE, DEFAULT_F2B_RECIDIVE)
+        self.history: dict[str, int] = {}
         self.categories = {
             c.strip().upper()
             for c in opts.get(CONF_F2B_CATEGORIES, DEFAULT_F2B_CATEGORIES).split(",") if c.strip()
@@ -175,7 +182,7 @@ class LogManager:
         self._last_ts = int(time.time() * 1000) - backfill * 60_000
         self._seen: deque[str] = deque(maxlen=5000)
         self._hits: dict[str, deque[float]] = {}
-        self._listeners: list[Callable[[dict], None]] = []
+        self._listeners: list[Callable[[dict, Context | None], None]] = []
         self._writer: logging.Logger | None = None
         self._store: Store = Store(hass, 1, f"{DOMAIN}.{coordinator.config_entry.entry_id}.bans")
         self.bans: dict[str, dict[str, Any]] = {}
@@ -203,11 +210,11 @@ class LogManager:
     def _save(self) -> None:
         self._store.async_delay_save(
             lambda: {"bans": self.bans, "stats": self.stats, "last_alert": self.last_alert,
-                     "last_ban": self.last_ban}, 10)
+                     "last_ban": self.last_ban, "history": self.history}, 10)
 
     @callback
-    def _record(self, entry: dict) -> None:
-        """Zähler + Alarmierung für einen Eintrag."""
+    def _record(self, entry: dict) -> Context | None:
+        """Zähler + Alarmierung; liefert bei Alarmen den Kontext (für „Was ist passiert“)."""
         self._count("events")
         cat = (entry.get("category") or "").upper()
         event = (entry.get("event") or "").upper()
@@ -219,10 +226,13 @@ class LogManager:
             self._count("fw_blocks")
         if cat == "HA_LOGIN":
             self._count("ha_login")
+        ctx: Context | None = None
         if is_alert(entry):
+            ctx = Context()
             self.last_alert = {k: v for k, v in entry.items() if v is not None and k != "id"}
-            self.hass.bus.async_fire(EVENT_ALERT, self.last_alert)
+            self.hass.bus.async_fire(EVENT_ALERT, self.last_alert, context=ctx)
         self._save()
+        return ctx
 
     # -------------------------------------------------------------- Setup
     async def async_setup(self) -> None:
@@ -231,6 +241,7 @@ class LogManager:
         self.stats = stored.get("stats") or self._empty_stats()
         self.last_alert = stored.get("last_alert")
         self.last_ban = stored.get("last_ban")
+        self.history = stored.get("history", {})
         if self.enabled and self.log_file:
             self._writer = await self.hass.async_add_executor_job(self._open_file)
         if self.f2b and self.ha_login:
@@ -292,7 +303,9 @@ class LogManager:
                 h.close()
 
     @callback
-    def async_add_listener(self, cb: Callable[[dict], None]) -> Callable[[], None]:
+    def async_add_listener(
+        self, cb: Callable[[dict, Context | None], None]
+    ) -> Callable[[], None]:
         self._listeners.append(cb)
         return lambda: self._listeners.remove(cb)
 
@@ -331,10 +344,10 @@ class LogManager:
             self._last_ts = max(self._last_ts, item.get("timestamp") or 0)
             entry = parse_entry(item)
             self.hass.bus.async_fire(EVENT_LOG, entry)
+            ctx = self._record(entry)
             for cb in list(self._listeners):
-                cb(entry)
+                cb(entry, ctx)
             lines.append(self._format(entry))
-            self._record(entry)
             self._check_f2b(entry)
         if lines and self._writer:
             await self.hass.async_add_executor_job(self._write, lines)
@@ -387,7 +400,7 @@ class LogManager:
     async def _instant_ban(self, ip: str, event: str) -> None:
         self.bans.pop(ip, None)  # Platzhalter gegen Doppel-Bans entfernen
         try:
-            await self.async_ban(ip, self.bantime or None, f"{event} (sofort)")
+            await self.async_ban(ip, self.bantime_instant or None, f"{event} (sofort)")
         except UniFiApiError as err:
             _LOGGER.warning("Fail2Ban: Sperre von %s fehlgeschlagen: %s", ip, err)
 
@@ -433,9 +446,16 @@ class LogManager:
         current = [m for m in group.get("group_members", []) if m != BAN_PLACEHOLDER]
         if ip not in current:
             await self._set_members(group, sorted({*current, ip}))
+        count = self.history.get(ip, 0) + 1
+        self.history[ip] = count
+        if self.recidive and count >= self.recidive and minutes:
+            minutes = None
+            reason = f"{reason} – Wiederholungstäter ({count}. Sperre, dauerhaft)"
+        elif count > 1:
+            reason = f"{reason} – {count}. Sperre"
         now = time.time()
         self.bans[ip] = {"since": now, "until": now + minutes * 60 if minutes else None,
-                         "reason": reason}
+                         "reason": reason, "count": count}
         self._count("bans")
         self.last_ban = {"ip": ip, "reason": reason, "minutes": minutes,
                          "time": dt_util.utcnow().isoformat()}
@@ -474,6 +494,7 @@ class LogManager:
                 "since": dt_util.utc_from_timestamp(b["since"]).isoformat(),
                 "until": dt_util.utc_from_timestamp(b["until"]).isoformat() if b.get("until") else None,
                 "reason": b.get("reason"),
+                "count": b.get("count", 1),
             }
             for ip, b in self.bans.items()
         }
