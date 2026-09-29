@@ -45,6 +45,7 @@ get_objects:
           - dns_records
           - port_profiles
           - usergroups
+          - qos_rules
           - users
     filter:
       selector:
@@ -94,10 +95,82 @@ set_enabled:
 refresh:
   fields:
     config_entry_id: *id001
+get_logs:
+  fields:
+    config_entry_id: *id001
+    hours:
+      selector:
+        number:
+          min: 1
+          max: 720
+          unit_of_measurement: h
+    limit:
+      selector:
+        number:
+          min: 1
+          max: 1000
+          mode: box
+    category:
+      example: SECURITY
+      selector:
+        text: {}
+    filter:
+      selector:
+        text: {}
+ban_ip:
+  fields:
+    config_entry_id: *id001
+    ip: &id004
+      required: true
+      example: 203.0.113.5
+      selector:
+        text: {}
+    minutes:
+      selector:
+        number:
+          min: 1
+          max: 525600
+          unit_of_measurement: min
+          mode: box
+    reason:
+      selector:
+        text: {}
+unban_ip:
+  fields:
+    config_entry_id: *id001
+    ip: *id004
+get_bans:
+  fields:
+    config_entry_id: *id001
+regenerate_vpn_key:
+  fields:
+    config_entry_id: *id001
+    vpn:
+      required: true
+      example: One-Click VPN
+      selector:
+        text: {}
+regenerate_wlan_password:
+  fields:
+    config_entry_id: *id001
+    wlan:
+      required: true
+      example: guest
+      selector:
+        text: {}
+    length:
+      selector:
+        number:
+          min: 12
+          max: 63
+          mode: box
+    notify:
+      selector:
+        boolean: {}
 block_client:
   fields:
     config_entry_id: *id001
-    mac: &id004
+    mac: &id005
       required: true
       example: aa:bb:cc:dd:ee:ff
       selector:
@@ -105,27 +178,27 @@ block_client:
 unblock_client:
   fields:
     config_entry_id: *id001
-    mac: *id004
+    mac: *id005
 reconnect_client:
   fields:
     config_entry_id: *id001
-    mac: *id004
+    mac: *id005
 forget_client:
   fields:
     config_entry_id: *id001
-    mac: *id004
+    mac: *id005
 unauthorize_guest:
   fields:
     config_entry_id: *id001
-    mac: *id004
+    mac: *id005
 restart_device:
   fields:
     config_entry_id: *id001
-    mac: *id004
+    mac: *id005
 authorize_guest:
   fields:
     config_entry_id: *id001
-    mac: *id004
+    mac: *id005
     minutes:
       selector:
         number:
@@ -135,7 +208,7 @@ authorize_guest:
 power_cycle_port:
   fields:
     config_entry_id: *id001
-    mac: *id004
+    mac: *id005
     port_idx:
       required: true
       selector:
