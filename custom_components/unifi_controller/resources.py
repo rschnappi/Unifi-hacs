@@ -20,6 +20,7 @@ DATASETS: dict[str, str] = {
     "port_profiles": "rest/portconf",
     "usergroups": "rest/usergroup",
     "qos_rules": "v2/qos-rules",
+    "settings": "rest/setting",
     "users": "rest/user",
 }
 OPTIONAL_DATASETS = {"users"}  # nur mit Client-Sperr-Schaltern
@@ -31,13 +32,22 @@ LAN_PURPOSES = {"corporate", "guest"}
 VOLATILE = {"hits", "last_hit"}
 SKIP_ATTRS = VOLATILE | {"site_id", "external_id", "_id", "attr_hidden_id"}
 
+SECRET_WORDS = ("key", "psk", "token", "secret", "password", "passphrase",
+                "certificate", "private", "passwd")
+
 
 def is_secret(key: str) -> bool:
-    return key.startswith("x_") or key in {"private_preshared_keys", "radius_secret"}
+    """x_*-Felder und alles, was nach Schlüssel/Passwort/Zertifikat aussieht."""
+    k = key.lower()
+    if key.startswith("x_"):
+        return True
+    if k in ("key", "public_key") or k.endswith("_public_key") or k.endswith("_key_id"):
+        return False
+    return any(w in k for w in SECRET_WORDS)
 
 
 def redact(obj: Any) -> Any:
-    """x_*-Felder (Passwörter, WireGuard-Keys …) rekursiv entfernen."""
+    """Geheimnisse (Passwörter, Keys, PSKs, Tokens, Zertifikate …) rekursiv entfernen."""
     if isinstance(obj, dict):
         return {k: redact(v) for k, v in obj.items() if not is_secret(k)}
     if isinstance(obj, list):
