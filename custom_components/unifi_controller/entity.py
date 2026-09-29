@@ -37,6 +37,7 @@ def controller_device_info(entry: UniFiConfigEntry, coordinator: UniFiCoordinato
 
 
 def network_device_info(entry: UniFiConfigEntry, device: dict) -> DeviceInfo:
+    # Kein via_device: ab HA 2026.x deprecated (Entfernung 2027.8)
     mac = device["mac"].lower()
     name = device.get("name") or device.get("model") or mac
     return DeviceInfo(
@@ -45,7 +46,6 @@ def network_device_info(entry: UniFiConfigEntry, device: dict) -> DeviceInfo:
         manufacturer=MANUFACTURER,
         model=device.get("model"),
         sw_version=device.get("version"),
-        via_device=(DOMAIN, entry.entry_id),
     )
 
 
