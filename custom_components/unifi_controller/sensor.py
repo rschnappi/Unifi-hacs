@@ -106,7 +106,20 @@ CONTROLLER_SENSORS: tuple[ControllerSensorDescription, ...] = (
     ),
 )
 
+DEVICE_STATES = {
+    0: "offline", 1: "verbunden", 2: "adoption_ausstehend", 4: "update", 5: "provisionierung",
+    6: "heartbeat_fehlt", 7: "adoption", 9: "adoptionsfehler", 10: "adoption_fehlgeschlagen",
+    11: "isoliert",
+}
+
 DEVICE_SENSORS: tuple[DeviceSensorDescription, ...] = (
+    DeviceSensorDescription(
+        key="status", name="Status", icon="mdi:access-point-check",
+        device_class=SensorDeviceClass.ENUM,
+        options=[*DEVICE_STATES.values(), "unbekannt"],
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda d: DEVICE_STATES.get(d.get("state"), "unbekannt"),
+    ),
     DeviceSensorDescription(
         key="cpu", name="CPU", native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT, icon="mdi:cpu-64-bit",
