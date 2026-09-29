@@ -1,0 +1,119 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "UniFi Controller",
+        "description": "The API key is read from secrets.yaml and never stored in Home Assistant.",
+        "data": {
+          "host": "Host",
+          "site": "Site",
+          "secret_name": "Key name in secrets.yaml",
+          "verify_ssl": "Verify SSL certificate"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Renew API key",
+        "description": "Put the new key into secrets.yaml and confirm.",
+        "data": {
+          "secret_name": "Key name in secrets.yaml"
+        }
+      }
+    },
+    "error": {
+      "secret_not_found": "Key not found in secrets.yaml.",
+      "invalid_auth": "API key rejected.",
+      "cannot_connect": "Cannot connect to controller."
+    },
+    "abort": {
+      "already_configured": "Controller already configured.",
+      "reauth_successful": "API key renewed."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Options",
+        "data": {
+          "prefix": "Device name prefix",
+          "scan_interval": "Scan interval (s)",
+          "client_switches": "Block switches for named clients",
+          "portforwards": "Port forwards as switches",
+          "trafficrules": "Traffic rules as switches",
+          "firewall_policies": "Firewall policies as switches"
+        }
+      }
+    }
+  },
+  "services": {
+    "api_request": {
+      "name": "API request",
+      "description": "Arbitrary UniFi API call. Path relative to /api/s/<site>/, 'v2/…' for v2 API, 'integration/…' for the Integration API.",
+      "fields": {
+        "config_entry_id": {"name": "Controller", "description": "Only needed with multiple controllers."},
+        "method": {"name": "Method", "description": "HTTP method."},
+        "path": {"name": "Path", "description": "e.g. stat/sysinfo, rest/networkconf, v2/trafficrules"},
+        "payload": {"name": "Payload", "description": "JSON body for POST/PUT."}
+      }
+    },
+    "block_client": {
+      "name": "Block client",
+      "description": "Blocks a client.",
+      "fields": {
+        "config_entry_id": {"name": "Controller", "description": "Only needed with multiple controllers."},
+        "mac": {"name": "MAC", "description": "MAC address of the client/device."}
+      }
+    },
+    "unblock_client": {
+      "name": "Unblock client",
+      "description": "Removes the block.",
+      "fields": {
+        "config_entry_id": {"name": "Controller", "description": "Only needed with multiple controllers."},
+        "mac": {"name": "MAC", "description": "MAC address of the client/device."}
+      }
+    },
+    "reconnect_client": {
+      "name": "Reconnect client",
+      "description": "Kicks a wireless client.",
+      "fields": {
+        "config_entry_id": {"name": "Controller", "description": "Only needed with multiple controllers."},
+        "mac": {"name": "MAC", "description": "MAC address of the client/device."}
+      }
+    },
+    "restart_device": {
+      "name": "Restart device",
+      "description": "Restarts a UniFi device.",
+      "fields": {
+        "config_entry_id": {"name": "Controller", "description": "Only needed with multiple controllers."},
+        "mac": {"name": "MAC", "description": "MAC address of the client/device."}
+      }
+    },
+    "authorize_guest": {
+      "name": "Authorize guest",
+      "description": "Authorizes a hotspot guest.",
+      "fields": {
+        "config_entry_id": {"name": "Controller", "description": "Only needed with multiple controllers."},
+        "mac": {"name": "MAC", "description": "MAC address of the client/device."},
+        "minutes": {"name": "Minutes", "description": "Duration."}
+      }
+    },
+    "power_cycle_port": {
+      "name": "Power-cycle PoE port",
+      "description": "Power-cycles a PoE port.",
+      "fields": {
+        "config_entry_id": {"name": "Controller", "description": "Only needed with multiple controllers."},
+        "mac": {"name": "MAC", "description": "Switch MAC."},
+        "port_idx": {"name": "Port", "description": "Port number."}
+      }
+    },
+    "set_wlan": {
+      "name": "Update WLAN",
+      "description": "Enable/disable WLAN or set password.",
+      "fields": {
+        "config_entry_id": {"name": "Controller", "description": "Only needed with multiple controllers."},
+        "wlan": {"name": "WLAN", "description": "SSID or ID."},
+        "enabled": {"name": "Enabled", "description": "Enable or disable the WLAN."},
+        "passphrase": {"name": "Password", "description": "8–63 characters."}
+      }
+    }
+  }
+}
