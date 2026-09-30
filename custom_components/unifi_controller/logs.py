@@ -343,8 +343,9 @@ class LogManager:
             self._seen.append(item["id"])
             self._last_ts = max(self._last_ts, item.get("timestamp") or 0)
             entry = parse_entry(item)
-            self.hass.bus.async_fire(EVENT_LOG, entry)
-            ctx = self._record(entry)
+            ctx = Context()  # „Was ist passiert“ der Log-Entität zeigt diese Meldung
+            self.hass.bus.async_fire(EVENT_LOG, entry, context=ctx)
+            self._record(entry)
             for cb in list(self._listeners):
                 cb(entry, ctx)
             lines.append(self._format(entry))
