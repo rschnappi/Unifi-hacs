@@ -1,4 +1,8 @@
-"""Logbuch: Sicherheitsereignisse und Fail2Ban-Aktionen mit Klartext."""
+"""Logbuch: jeder UniFi-Log-Eintrag, Sicherheitsereignisse und Fail2Ban-Aktionen im Klartext.
+
+Die Event-Entitäten übernehmen den Kontext dieser Bus-Events – dadurch zeigt die
+Aktivitätsanzeige unter „Was ist passiert“ die jeweilige Meldung.
+"""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -6,7 +10,7 @@ from collections.abc import Callable
 from homeassistant.components.logbook import LOGBOOK_ENTRY_MESSAGE, LOGBOOK_ENTRY_NAME
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_ALERT, EVENT_BAN
+from .const import DOMAIN, EVENT_ALERT, EVENT_BAN, EVENT_LOG
 
 
 @callback
@@ -33,5 +37,19 @@ def async_describe_events(
             msg = f"hat {d.get('ip')} entsperrt"
         return {LOGBOOK_ENTRY_NAME: "UniFi Fail2Ban", LOGBOOK_ENTRY_MESSAGE: msg}
 
+    @callback
+    def describe_log(event: Event) -> dict[str, str]:
+        d = event.data
+        parts = [d.get("message") or d.get("title") or d.get("event") or ""]
+        if d.get("policy"):
+            parts.append(f"Regel: {d['policy']}")
+        if d.get("src_ip") or d.get("dst_ip"):
+            parts.append(f"{d.get('src_ip') or '?'} → {d.get('dst_ip') or '?'}")
+        return {
+            LOGBOOK_ENTRY_NAME: f"UniFi {d.get('category') or ''} {d.get('event') or ''}".strip(),
+            LOGBOOK_ENTRY_MESSAGE: " · ".join(p for p in parts if p),
+        }
+
+    async_describe_event(DOMAIN, EVENT_LOG, describe_log)
     async_describe_event(DOMAIN, EVENT_ALERT, describe_alert)
     async_describe_event(DOMAIN, EVENT_BAN, describe_ban)
