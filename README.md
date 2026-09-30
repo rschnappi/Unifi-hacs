@@ -164,14 +164,21 @@ Admin-Anmeldungen, Client-Verbindungen, VPN, Updates …) wird bei jedem Abfrage
 | Wer wurde zuletzt gesperrt? | `sensor.netz_unifi_fail2ban_letzte_sperre` |
 | Was war der letzte Angriff? | `sensor.netz_unifi_letzte_sicherheitsmeldung` (Klartext, Details als Attribute) |
 | Wie viel ist heute passiert? | `sensor.netz_unifi_ips_angriffe_heute`, `…_firewall_blocks_heute`, `…_security_events_heute`, `…_ha_login_fehlversuche_heute`, `…_fail2ban_sperren_heute`, `…_log_eintrage_heute` |
-| Verlauf mit Text | **Logbuch** – „UniFi HIGH THREAT_BLOCKED: A network intrusion attempt from … [IP]“ und „UniFi Fail2Ban hat … gesperrt“ |
+| Verlauf mit Text | **Logbuch** – „UniFi SECURITY BLOCKED_BY_FIREWALL: … · Regel: … · Quelle → Ziel“, „UniFi HIGH THREAT_BLOCKED …“, „UniFi Fail2Ban hat … gesperrt“ |
 | Automationen | `event.netz_unifi_sicherheit` (nur sicherheitsrelevant), `event.netz_unifi_log` (alles), `event.netz_unifi_fail2ban`; Bus-Events `unifi_controller_alert`, `unifi_controller_log`, `unifi_controller_ban` |
 
 „Sicherheitsrelevant“ = IPS-Treffer, Admin-Ereignisse, HA-Login-Fehlversuche und Security-Events mit
-öffentlicher Quell-IP. Bei diesen Ereignissen und bei Fail2Ban-Sperren zeigt die Aktivitätsanzeige der
-Event-Entitäten unter **„Was ist passiert“** die Meldung im Klartext. `event.netz_unifi_log` feuert zusätzlich bei
-**jedem** anderen Eintrag (z. B. interne Firewall-Blocks aus dem IoT-Netz) – dort bleibt „Was ist passiert“ leer,
-um das Logbuch nicht mit tausenden Einträgen am Tag zu fluten.
+öffentlicher Quell-IP. In der Aktivitätsanzeige aller drei Event-Entitäten steht unter **„Was ist passiert“**
+die Meldung im Klartext (Meldung · Regel · Quelle → Ziel). `event.netz_unifi_log` feuert bei **jedem** Eintrag,
+auch bei internen Firewall-Blocks – wem das Logbuch dadurch zu voll wird, blendet die Entität aus
+(die Textzeilen „UniFi …“ bleiben sichtbar):
+
+```yaml
+logbook:
+  exclude:
+    entities:
+      - event.netz_unifi_log
+```
 
 **Log-Datei** (Option, z. B. `/share/unifi/unifi.log`, rotiert bei 5 MB × 3), eine Zeile pro Ereignis:
 ```
@@ -261,7 +268,7 @@ Portweiterleitungen, QoS, VPN, WLANs, LEDs). Umstieg:
 Ein neuer Release braucht **nur einen Tag** – die Version in `manifest.json` muss nicht angepasst werden:
 
 ```bash
-git tag v0.4.1 && git push --tags
+git tag v0.4.2 && git push --tags
 ```
 
 oder auf GitHub *Releases → Draft a new release → neuen Tag eintippen → Publish*.
