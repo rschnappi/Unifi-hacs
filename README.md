@@ -25,8 +25,8 @@ Getestet mit UDM Pro SE, UniFi OS 5 / Network 10.6. Sollte mit allen UniFi-OS-Ko
 | Geräte | Online, Status, Firmware-Update, CPU, Speicher, Temperatur, Clients, IP, LED, Neustart, PoE, Power-Cycle |
 | Clients | sperren/entsperren, trennen, vergessen, Gast freigeben – optional als Schalter |
 | Logs | System-Log als Logbuch-Einträge, Tageszähler, letzte Sicherheitsmeldung, Events, optional Log-Datei |
-| Fail2Ban | auffällige öffentliche IPs automatisch in eine UniFi-Adressgruppe → Firewall blockt (IPS-Treffer sofort, HA-Login-Fehlversuche mit Schwelle) |
-| Länder-Blocking | UniFi Region Blocking mit Länderauswahl in den Optionen |
+| Fail2Ban | auffällige öffentliche IPs automatisch in eine UniFi-Adressgruppe → Firewall blockt (IPS-Treffer sofort, HA-Login-Fehlversuche mit Schwelle, Wiederholungstäter dauerhaft) |
+| Länder-Blocking | nur erlaubte Länder + Ausnahmen (z. B. Claude) von außen, als Zonen-Policies |
 | Alles andere | generische Services zum Lesen/Ändern/Anlegen/Löschen jedes Config-Objekts + roher API-Zugriff |
 
 Neue Objekte (Policy angelegt, VLAN dazu, neuer AP …) erscheinen automatisch, gelöschte werden unavailable.
@@ -124,7 +124,7 @@ im Namen) tauchen **nie** in Attributen, Diagnosen oder Service-Antworten auf �
 Ressourcen: `networks`, `wlans`, `firewall_policies`, `firewall_zones`, `firewall_groups`,
 `trafficrules`, `trafficroutes`, `portforwards`, `routes`, `dns_records`, `port_profiles`,
 `usergroups`, `qos_rules`, `settings`, `users`. Objekte werden per **Name** oder `_id` angesprochen.
-Fehlgeschlagene Service-Aufrufe landen mit der Controller-Antwort im HA-Log.
+Fehlgeschlagene Service-Aufrufe landen mit der vollständigen Controller-Antwort im HA-Log.
 
 ```yaml
 # Kind sperren: Policy einschalten
@@ -160,7 +160,7 @@ Admin-Anmeldungen, Client-Verbindungen, VPN, Updates …) wird bei jedem Abfrage
 | Frage | Entity |
 | --- | --- |
 | Läuft Fail2Ban? Mit welchen Regeln? | `binary_sensor.netz_unifi_fail2ban_aktiv` (Regeln als Attribute) |
-| Wer ist gerade gesperrt? | `sensor.netz_unifi_fail2ban_gesperrt` (Liste mit Grund und Ablauf) |
+| Wer ist gerade gesperrt? | `sensor.netz_unifi_fail2ban_gesperrt` (Liste mit Grund, Ablauf, Anzahl Sperren) |
 | Wer wurde zuletzt gesperrt? | `sensor.netz_unifi_fail2ban_letzte_sperre` |
 | Was war der letzte Angriff? | `sensor.netz_unifi_letzte_sicherheitsmeldung` (Klartext, Details als Attribute) |
 | Wie viel ist heute passiert? | `sensor.netz_unifi_ips_angriffe_heute`, `…_firewall_blocks_heute`, `…_security_events_heute`, `…_ha_login_fehlversuche_heute`, `…_fail2ban_sperren_heute`, `…_log_eintrage_heute` |
@@ -168,8 +168,10 @@ Admin-Anmeldungen, Client-Verbindungen, VPN, Updates …) wird bei jedem Abfrage
 | Automationen | `event.netz_unifi_sicherheit` (nur sicherheitsrelevant), `event.netz_unifi_log` (alles), `event.netz_unifi_fail2ban`; Bus-Events `unifi_controller_alert`, `unifi_controller_log`, `unifi_controller_ban` |
 
 „Sicherheitsrelevant“ = IPS-Treffer, Admin-Ereignisse, HA-Login-Fehlversuche und Security-Events mit
-öffentlicher Quell-IP. `event.netz_unifi_log` feuert bei **jedem** Eintrag (auch interne Firewall-Blocks aus dem
-IoT-Netz) – dort steht in der Aktivitätsanzeige nur der Zeitpunkt; den Inhalt zeigen Logbuch und Sensoren.
+öffentlicher Quell-IP. Bei diesen Ereignissen und bei Fail2Ban-Sperren zeigt die Aktivitätsanzeige der
+Event-Entitäten unter **„Was ist passiert“** die Meldung im Klartext. `event.netz_unifi_log` feuert zusätzlich bei
+**jedem** anderen Eintrag (z. B. interne Firewall-Blocks aus dem IoT-Netz) – dort bleibt „Was ist passiert“ leer,
+um das Logbuch nicht mit tausenden Einträgen am Tag zu fluten.
 
 **Log-Datei** (Option, z. B. `/share/unifi/unifi.log`, rotiert bei 5 MB × 3), eine Zeile pro Ereignis:
 ```
@@ -185,7 +187,9 @@ In den Optionen *Logs & Fail2Ban* einschalten:
 | --- | --- | --- |
 | Treffer bis zur Sperre (`maxretry`) | 5 | |
 | Zeitfenster (`findtime`) | 600 s | |
-| Sperrdauer (`bantime`) | 60 min | 0 = dauerhaft |
+| Sperrdauer Schwellen-Treffer (`bantime`) | 60 min | z. B. HA-Login, 0 = dauerhaft |
+| Sperrdauer Sofort-Events | 1440 min | IPS-Treffer, 0 = dauerhaft |
+| Wiederholungstäter | 3 | ab der 3. Sperre derselben IP dauerhaft, 0 = aus |
 | Kategorien | `SECURITY` | kommagetrennt, z. B. `SECURITY,ADMIN` |
 | Sofort sperren bei Events | `THREAT_BLOCKED,THREAT_DETECTED` | IPS-Treffer → Sperre schon beim 1. Mal |
 | HA-Login-Fehlversuche mitzählen | an | fehlgeschlagene HA-Anmeldungen (echte Quell-IP via Portweiterleitung) |
@@ -193,8 +197,8 @@ In den Optionen *Logs & Fail2Ban* einschalten:
 | Adressgruppe | `HA Fail2Ban` | wird bei der ersten Sperre angelegt |
 
 Öffentliche Quell-IPs, die innerhalb von `findtime` `maxretry`-mal auftauchen (bzw. einmal bei Sofort-Events),
-landen für `bantime` in der UniFi-**Adressgruppe**; nach Ablauf werden sie automatisch entfernt
-(übersteht HA-Neustarts). Private Adressen und die Whitelist werden nie gesperrt.
+landen in der UniFi-**Adressgruppe**; nach Ablauf werden sie automatisch entfernt (übersteht HA-Neustarts).
+Private Adressen und die Whitelist werden nie gesperrt.
 
 **Einmalig nötig:** eine Firewall-Policy, die diese Gruppe blockt – je Zielzone, die von außen erreichbar ist:
 
@@ -208,19 +212,38 @@ Leere Gruppen lehnt UniFi ab – solange niemand gesperrt ist, steht der Platzha
 
 ## Länder-Blocking
 
-*Konfigurieren → Länder-Blocking*: Ein/Aus, Modus (**ausgewählte Länder sperren** oder **nur ausgewählte
-Länder erlauben**), Richtung (ein-/ausgehend/beides) und Länderauswahl aus allen ISO-Ländern (deutsche Namen).
-Die Einstellung wird direkt im Controller gespeichert (UniFi *Region Blocking*, Setting `usg_geo`) –
-dieselbe Einstellung wie im UniFi-UI.
+*Konfigurieren → Länder-Blocking*: erlaubte Länder (Liste kommt vom Controller, deutsche Namen),
+geschützte Zonen (z. B. die Zone mit der HA-Portweiterleitung), WireGuard am Gateway, Ausnahmen.
+Von außen sind dann **nur neue Verbindungen aus den erlaubten Ländern und den Ausnahmen** möglich;
+ausgehender Verkehr und dessen Antworten sind nicht betroffen.
+
+Umgesetzt als Zonen-Policies, je geschützter Zone in dieser Reihenfolge:
+
+| # | Policy | Wirkung |
+| --- | --- | --- |
+| 1 | `Länder-Ausnahmen -> <Zone> erlauben` | Adressgruppe **HA Länder-Ausnahmen** (Standard: `160.79.104.0/21` = Anthropic/Claude-MCP) |
+| 2 | `Länder erlauben -> <Zone> (AT DE …)` | Quelle = erlaubte Länder |
+| 3 | `Länder-Blocking External -> <Zone> (Rest blocken)` | alle übrigen **neuen** Verbindungen blocken (mit Logging) |
+
+WireGuard: dasselbe, aber **nur für den WireGuard-Port** – ein Pauschal-Block am Gateway würde
+IPv6-Router-Advertisements, DHCPv6 und IPTV vom Provider treffen.
+
+> **Nicht** das globale UniFi-„Region Blocking“ (CyberSecure) verwenden: es kennt keine Ausnahmen.
+> Wer darüber nur Österreich erlaubt, sperrt u. a. den Claude-MCP-Connector (USA) aus.
+> Ebenso: Anthropic-Bereich nicht aus den Ausnahmen entfernen, wenn Claude HA steuern soll.
+
+Hinweise aus der Praxis: gültig sind nur Codes aus `stat/ccode` (ohne `AN`); UniFi kennt kein
+„alle außer …“ und begrenzt die Länge von Länderlisten – daher Allow-Liste + Rest-Block.
+Let's Encrypt mit **DNS-Challenge** ist nicht betroffen, HTTP-/TLS-Challenge über 443 schon.
 
 | Entity | Inhalt |
 | --- | --- |
-| `switch.netz_unifi_lander_blocking` | Länder-Blocking ein/aus |
-| `sensor.netz_unifi_lander_blocking_lander` | Anzahl Länder, Liste als Attribut |
+| `switch.netz_unifi_lander_blocking` | Rest-Block-Policies ein/aus (Allow-Regeln bleiben) |
+| `sensor.netz_unifi_lander_blocking_erlaubte_lander` | Anzahl erlaubter Länder, Zonen/Ausnahmen als Attribute |
 
 ```yaml
 action: unifi_controller.set_region_blocking
-data: {enabled: true, action: block, traffic_direction: both, add: [CN, RU, KP, IR]}
+data: {add: [IT]}          # Italien zusätzlich erlauben (z. B. Urlaub)
 ```
 
 ## Migration von „UniFi Network Rules“
@@ -238,7 +261,7 @@ Portweiterleitungen, QoS, VPN, WLANs, LEDs). Umstieg:
 Ein neuer Release braucht **nur einen Tag** – die Version in `manifest.json` muss nicht angepasst werden:
 
 ```bash
-git tag v0.4.0 && git push --tags
+git tag v0.4.1 && git push --tags
 ```
 
 oder auf GitHub *Releases → Draft a new release → neuen Tag eintippen → Publish*.
