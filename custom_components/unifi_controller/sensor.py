@@ -1,4 +1,4 @@
-"""Sensoren: Controller, WAN, Clients, Netzwerke, Logs, Fail2Ban, Länder-Blocking, Geräte."""
+"""Sensoren: Controller, WAN, Clients, Netzwerke, Logs, Fail2Ban, Länder-Blocking, Speedtest, VPN, Apps, Geräte."""
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -26,6 +26,7 @@ from .coordinator import UniFiConfigEntry, UniFiCoordinator, UniFiData
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .region import country_names, state as region_state, zone_id
 from .resources import LAN_PURPOSES, VPN_PURPOSES, object_name, scalar_attrs
+from .wireguard import users_of, wg_servers
 
 STAT_SENSORS = (
     ("events", "Log-Einträge heute", "mdi:text-box-multiple"),
@@ -215,6 +216,23 @@ async def async_setup_entry(
             yield LastBanSensor(coordinator)
         if zone_id(data, "external"):
             yield RegionSensor(coordinator)
+        for key, name, unit, icon in SPEEDTEST_SENSORS:
+            yield SpeedtestSensor(coordinator, key, name, unit, icon)
+        yield BackupSensor(coordinator)
+        for nid in wg_servers(coordinator):
+            yield VpnAccessSensor(coordinator, nid)
+        for nid in coordinator.apps.network_ids:
+            if nid in data.config.get("networks", {}):
+                yield AppUsageSensor(coordinator, nid)
+        for mac, dev in data.devices.items():
+            for t in dev.get("temperatures") or []:
+                if t.get("name"):
+                    yield DeviceTemperature(coordinator, mac, t["name"])
+            if dev.get("type") in ("udm", "ugw", "uxg") and dev.get("uplink"):
+                yield ActiveWanSensor(coordinator, mac)
+            for port in dev.get("port_table") or []:
+                if port.get("up") or port.get("last_connection"):
+                    yield PortSensor(coordinator, mac, port["port_idx"])
         for mac, dev in data.devices.items():
             for desc in DEVICE_SENSORS:
                 if desc.exists_fn(dev):
@@ -409,3 +427,200 @@ class RegionSensor(ControllerEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         st = region_state(self.coordinator.data)
         return {**st, "names": country_names(st["countries"])}
+
+
+# ------------------------------------------------------------- Betrieb & VPN & Apps
+SPEEDTEST_SENSORS = (
+    ("xput_download", "Speedtest Download", "Mbit/s", "mdi:download-network"),
+    ("xput_upload", "Speedtest Upload", "Mbit/s", "mdi:upload-network"),
+    ("latency", "Speedtest Latenz", "ms", "mdi:timer-outline"),
+)
+
+
+def _speedtests(data: UniFiData) -> list[dict]:
+    return sorted(data.config.get("speedtests", {}).values(), key=lambda t: t.get("time") or 0)
+
+
+class SpeedtestSensor(ControllerEntity, SensorEntity):
+    """Letzter erfolgreicher Speedtest (Ergebnisse mit 0 = Fehlversuch, z. B. tote WAN2)."""
+
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(self, coordinator: UniFiCoordinator, key: str, name: str, unit: str,
+                 icon: str) -> None:
+        super().__init__(coordinator, f"speedtest_{key}", name)
+        self._key = key
+        self._attr_native_unit_of_measurement = unit
+        self._attr_icon = icon
+
+    @property
+    def _ok(self) -> dict | None:
+        ok = [t for t in _speedtests(self.coordinator.data) if (t.get("xput_download") or 0) > 0]
+        return ok[-1] if ok else None
+
+    @property
+    def native_value(self) -> float | None:
+        t = self._ok
+        return t.get(self._key) if t else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        tests = _speedtests(self.coordinator.data)
+        t, last = self._ok, (tests[-1] if tests else None)
+        fmt = lambda x: dt_util.utc_from_timestamp(x["time"] / 1000).isoformat() if x else None  # noqa: E731
+        return {"gemessen": fmt(t), "letzter_versuch": fmt(last),
+                "letzter_versuch_ok": bool(last and (last.get("xput_download") or 0) > 0),
+                "tests_30_tage": len([x for x in tests if (x.get("xput_download") or 0) > 0])}
+
+
+class BackupSensor(ControllerEntity, SensorEntity):
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:backup-restore"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "controller_backup", "Letztes Controller-Backup")
+
+    @property
+    def _latest(self) -> dict | None:
+        b = sorted(self.coordinator.data.config.get("backups", {}).values(),
+                   key=lambda x: x.get("time") or 0)
+        return b[-1] if b else None
+
+    @property
+    def native_value(self) -> datetime | None:
+        b = self._latest
+        return dt_util.utc_from_timestamp(b["time"] / 1000) if b and b.get("time") else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        b = self._latest or {}
+        return {"datei": b.get("filename"), "groesse_kb": round((b.get("size") or 0) / 1024),
+                "version": b.get("version"),
+                "anzahl": len(self.coordinator.data.config.get("backups", {}))}
+
+
+class VpnAccessSensor(ControllerEntity, SensorEntity):
+    """Konfigurierte WireGuard-Zugänge eines Servers."""
+
+    _attr_icon = "mdi:account-key"
+    _attr_native_unit_of_measurement = "Zugänge"
+
+    def __init__(self, coordinator: UniFiCoordinator, net_id: str) -> None:
+        net = coordinator.data.config["networks"][net_id]
+        super().__init__(coordinator, f"vpn_access_{net_id}", f"VPN {object_name(net)} Zugänge")
+        self._id = net_id
+
+    @property
+    def native_value(self) -> int:
+        return len(users_of(self.coordinator, self._id))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"zugaenge": [
+            {"name": u.get("name"), "ip": u.get("interface_ip"),
+             "public_key": (u.get("public_key") or "")[:12] + "…"}
+            for u in users_of(self.coordinator, self._id)]}
+
+
+class AppUsageSensor(ControllerEntity, SensorEntity):
+    """Datenmenge heute je App in einem (Kinder-)Netz – aus den Traffic-Flows."""
+
+    _attr_icon = "mdi:apps"
+    _attr_native_unit_of_measurement = "MB"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+
+    def __init__(self, coordinator: UniFiCoordinator, net_id: str) -> None:
+        net = coordinator.data.config["networks"][net_id]
+        super().__init__(coordinator, f"app_usage_{net_id}", f"Apps {object_name(net)} heute")
+        self._id = net_id
+
+    @property
+    def native_value(self) -> float:
+        return round(sum(self.coordinator.apps.usage(self._id).values()), 1)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        use = self.coordinator.apps.usage(self._id)
+        top = next((a for a in use if a != "Sonstiges"), None)
+        return {"top_app": top, "apps_mb": use, "fehler": self.coordinator.apps.error}
+
+
+class DeviceTemperature(DeviceEntity, SensorEntity):
+    _attr_device_class = SensorDeviceClass.TEMPERATURE
+    _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: UniFiCoordinator, mac: str, name: str) -> None:
+        super().__init__(coordinator, mac, f"temp_{name.lower()}", f"Temperatur {name}")
+        self._t = name
+
+    @property
+    def native_value(self) -> float | None:
+        for t in (self.device or {}).get("temperatures") or []:
+            if t.get("name") == self._t:
+                return t.get("value")
+        return None
+
+
+class ActiveWanSensor(DeviceEntity, SensorEntity):
+    _attr_icon = "mdi:wan"
+
+    def __init__(self, coordinator: UniFiCoordinator, mac: str) -> None:
+        super().__init__(coordinator, mac, "active_wan", "Aktive WAN-Leitung")
+
+    @property
+    def native_value(self) -> str | None:
+        dev = self.device or {}
+        ifname = (dev.get("uplink") or {}).get("name")
+        for key, label in (("wan1", "WAN1"), ("wan2", "WAN2")):
+            if (dev.get(key) or {}).get("ifname") == ifname:
+                return label
+        return ifname
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        up = (self.device or {}).get("uplink") or {}
+        return {"ip": up.get("ip"), "latenz_ms": up.get("latency"), "speed": up.get("speed"),
+                "medium": up.get("media"), "uptime_s": up.get("uptime")}
+
+
+class PortSensor(DeviceEntity, SensorEntity):
+    """Link-Geschwindigkeit eines Ports (0 = kein Link), Fehler/PoE/Gerät als Attribute."""
+
+    _attr_icon = "mdi:ethernet"
+    _attr_native_unit_of_measurement = "Mbit/s"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: UniFiCoordinator, mac: str, idx: int) -> None:
+        super().__init__(coordinator, mac, f"port_{idx}", f"Port {idx}")
+        self._idx = idx
+
+    @property
+    def _port(self) -> dict:
+        for p in (self.device or {}).get("port_table") or []:
+            if p.get("port_idx") == self._idx:
+                return p
+        return {}
+
+    @property
+    def native_value(self) -> int:
+        p = self._port
+        return int(p.get("speed") or 0) if p.get("up") else 0
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        p = self._port
+        conn = p.get("last_connection") or {}
+        problem = bool(p.get("up") and (
+            (p.get("media") in ("GE", "2.5GE") and (p.get("speed") or 0) < 100)
+            or not p.get("full_duplex") or (p.get("rx_errors") or 0) > 100))
+        return {
+            "name": p.get("name"), "link": bool(p.get("up")), "vollduplex": p.get("full_duplex"),
+            "medium": p.get("media"), "netz": p.get("network_name"),
+            "rx_fehler": p.get("rx_errors"), "tx_fehler": p.get("tx_errors"),
+            "rx_verworfen": p.get("rx_dropped"), "poe_watt": p.get("poe_power"),
+            "geraet_mac": conn.get("mac"), "geraet_ip": conn.get("ip"),
+            "problem": problem,
+        }
