@@ -1,0 +1,180 @@
+# CI/CD: prüfen → (Branch: PR + Merge) → Release aus main
+#
+# Push auf einen Branch (≠ main): Prüfungen; wenn alle grün → PR anlegen, squash-mergen,
+#   Branch löschen, Release erstellen.
+# Push auf main: Prüfungen; wenn grün → Release erstellen.
+# Hinweis: Aktionen mit dem GITHUB_TOKEN (PR anlegen, mergen, Tag pushen) starten KEINE
+# weiteren Workflows – deshalb läuft alles in diesem einen Workflow.
+#
+# Version: höchster Tag + Bump aus den Commit-Nachrichten seit dem letzten Tag
+#   „BREAKING“ oder „!:“  → major · „feat“ oder „[minor]“ → minor · sonst → patch
+#   „[skip release]“ in einer Commit-Nachricht oder nur Doku/Workflow geändert → kein Release.
+name: CI/CD
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Versionssprung"
+        type: choice
+        options: [auto, patch, minor, major]
+        default: auto
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: cicd-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    name: Syntax, JSON/YAML, Übersetzungen
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13"}
+      - run: pip install ruff pyyaml
+      - name: Python-Syntax + undefinierte Namen
+        run: |
+          python -m compileall -q custom_components
+          ruff check custom_components --select E9,F63,F7,F82 --output-format=github
+      - name: JSON/YAML + jeder Service übersetzt
+        run: |
+          python - <<'PY'
+          import json, sys, yaml, pathlib
+          b = pathlib.Path("custom_components/unifi_controller")
+          services = yaml.safe_load((b / "services.yaml").read_text())
+          json.loads((b / "manifest.json").read_text())
+          bad = 0
+          for f in ["strings.json", "translations/de.json", "translations/en.json"]:
+              data = json.loads((b / f).read_text())
+              missing = [s for s in services if s not in data.get("services", {})]
+              if missing:
+                  print(f"::error file={b/f}::fehlende Service-Übersetzungen: {missing}")
+                  bad += 1
+          sys.exit(bad)
+          PY
+
+  hassfest:
+    name: hassfest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: home-assistant/actions/hassfest@master
+
+  hacs:
+    name: HACS-Validierung
+    runs-on: ubuntu-latest
+    steps:
+      - uses: hacs/action@main
+        with:
+          category: integration
+          ignore: brands description topics
+
+  import:
+    name: Importtest gegen Home Assistant
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.13", cache: pip}
+      - run: pip install homeassistant segno
+      - name: Alle Module importieren
+        run: |
+          python - <<'PY'
+          import importlib, pkgutil, sys
+          sys.path.insert(0, "custom_components")
+          import unifi_controller
+          mods = [m.name for m in pkgutil.iter_modules(unifi_controller.__path__)]
+          for m in mods:
+              importlib.import_module(f"unifi_controller.{m}")
+          print(f"{len(mods)} Module importiert:", ", ".join(sorted(mods)))
+          PY
+
+  deliver:
+    name: PR, Merge & Release
+    needs: [lint, hassfest, hacs, import]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      BRANCH: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: PR anlegen und mergen (nur Branches)
+        if: github.ref_name != 'main'
+        run: |
+          TITLE="$(git log -1 --pretty=%s)"
+          BODY="$(git log --no-merges --pretty='- %s' origin/main..HEAD)"
+          if ! gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
+            gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"
+          fi
+          gh pr merge "$BRANCH" --squash --delete-branch --subject "$TITLE" --body "$BODY"
+          git fetch origin main
+          git checkout -B main origin/main
+
+      - name: Version bestimmen
+        id: v
+        run: |
+          LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
+          LAST=${LAST:-v0.0.0}
+          LOG=$(git log --pretty='%s%n%b' "${LAST}..HEAD")
+          if echo "$LOG" | grep -q '\[skip release\]'; then echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          if [ -z "$(git rev-list "${LAST}..HEAD")" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # nur Doku/Workflows geändert → mergen ja, Release nein
+          if [ -z "$(git diff --name-only "${LAST}..HEAD" -- custom_components hacs.json)" ]; then
+            echo "Keine Code-Änderung seit ${LAST} – kein Release"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          BUMP="${{ inputs.bump || 'auto' }}"
+          if [ "$BUMP" = "auto" ]; then
+            if echo "$LOG" | grep -Eq 'BREAKING|^[a-z]+(\(.+\))?!:'; then BUMP=major
+            elif echo "$LOG" | grep -Eiq '^feat|\[minor\]'; then BUMP=minor
+            else BUMP=patch; fi
+          fi
+          IFS=. read -r MA MI PA <<< "${LAST#v}"
+          case $BUMP in
+            major) MA=$((MA+1)); MI=0; PA=0;;
+            minor) MI=$((MI+1)); PA=0;;
+            *)     PA=$((PA+1));;
+          esac
+          echo "tag=v$MA.$MI.$PA" >> "$GITHUB_OUTPUT"
+          echo "version=$MA.$MI.$PA" >> "$GITHUB_OUTPUT"
+          echo "last=$LAST" >> "$GITHUB_OUTPUT"
+          echo "Neue Version: v$MA.$MI.$PA ($BUMP, vorher $LAST)"
+
+      - name: Tag setzen
+        if: steps.v.outputs.skip != '1'
+        run: |
+          git tag -a "${{ steps.v.outputs.tag }}" -m "${{ steps.v.outputs.tag }}"
+          git push origin "${{ steps.v.outputs.tag }}"
+
+      - name: ZIP bauen (Version aus Tag in manifest.json)
+        if: steps.v.outputs.skip != '1'
+        run: |
+          cd custom_components/unifi_controller
+          jq --arg v "${{ steps.v.outputs.version }}" '.version = $v' manifest.json > m.tmp && mv m.tmp manifest.json
+          zip -r "$GITHUB_WORKSPACE/unifi_controller.zip" . -x '*__pycache__*'
+
+      - name: Release erstellen
+        if: steps.v.outputs.skip != '1'
+        run: |
+          {
+            echo "## Änderungen"
+            git log --no-merges --pretty='- %s' "${{ steps.v.outputs.last }}..${{ steps.v.outputs.tag }}" | grep -viE '^- (release|merge) ' || true
+            echo
+            echo "**Vergleich:** https://github.com/${GITHUB_REPOSITORY}/compare/${{ steps.v.outputs.last }}...${{ steps.v.outputs.tag }}"
+          } > notes.md
+          gh release create "${{ steps.v.outputs.tag }}" unifi_controller.zip \
+            --title "${{ steps.v.outputs.tag }}" --notes-file notes.md --verify-tag
+            
