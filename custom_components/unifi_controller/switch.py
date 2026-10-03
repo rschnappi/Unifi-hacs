@@ -14,7 +14,14 @@ from .const import CONF_CLIENT_SWITCHES, CONF_SWITCH_GROUPS
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .region import async_apply, country_names, state as region_state, zone_id
-from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS, SwitchGroup, object_name
+from .resources import (
+    SWITCH_GROUP_KEYS,
+    SWITCH_GROUPS,
+    SwitchGroup,
+    name_key,
+    object_name,
+    switch_suffix,
+)
 
 
 async def async_setup_entry(
@@ -29,9 +36,15 @@ async def async_setup_entry(
     def factory():
         data = coordinator.data
         for group in groups:
+            seen: set[str] = set()
             for obj_id, obj in data.config.get(group.dataset, {}).items():
-                if group.field in obj and group.filter(obj):
-                    yield ResourceSwitch(coordinator, group, obj_id)
+                if group.field not in obj or not group.filter(obj):
+                    continue
+                suffix = switch_suffix(group, obj_id, obj)
+                if suffix in seen:      # gleichnamige Regel (z. B. während Neuanlage)
+                    continue
+                seen.add(suffix)
+                yield ResourceSwitch(coordinator, group, obj_id)
         if zone_id(data, "external") and region_state(data)["zones"]:
             yield RegionSwitch(coordinator)
         for mac, dev in data.devices.items():
@@ -56,16 +69,28 @@ class ResourceSwitch(ControllerEntity, SwitchEntity):
     def __init__(self, coordinator: UniFiCoordinator, group: SwitchGroup, obj_id: str) -> None:
         obj = coordinator.data.config[group.dataset][obj_id]
         super().__init__(
-            coordinator, f"{group.uid_prefix}_{obj_id}",
+            coordinator, switch_suffix(group, obj_id, obj),
             f"{group.label} {object_name(obj)}{group.suffix}",
         )
         self._group = group
         self._id = obj_id
+        self._key = name_key(obj)
         self._attr_icon = group.icon
 
     @property
     def _obj(self) -> dict | None:
-        return self.coordinator.data.config.get(self._group.dataset, {}).get(self._id)
+        objs = self.coordinator.data.config.get(self._group.dataset, {})
+        if not self._group.by_name:
+            return objs.get(self._id)
+        # Über den Namen auflösen: bisheriges Objekt bevorzugen, sonst das (neu angelegte)
+        # gleichnamige übernehmen – so überlebt der Schalter Löschen + Neuanlegen.
+        if (cur := objs.get(self._id)) is not None and name_key(cur) == self._key:
+            return cur
+        for obj_id, obj in objs.items():
+            if self._group.filter(obj) and name_key(obj) == self._key:
+                self._id = obj_id
+                return obj
+        return None
 
     @property
     def available(self) -> bool:
