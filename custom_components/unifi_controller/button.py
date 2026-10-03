@@ -1,4 +1,4 @@
-"""Buttons: Geräteneustart, PoE Power-Cycle, Schlüssel/Passwörter neu erzeugen."""
+"""Buttons: Neustart, PoE Power-Cycle, Schlüssel/Passwörter, Speedtest, Controller-Backup."""
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
@@ -22,6 +22,8 @@ async def async_setup_entry(
     coordinator = entry.runtime_data
 
     def factory():
+        yield SpeedtestButton(coordinator)
+        yield BackupButton(coordinator)
         for net_id, net in coordinator.data.config.get("networks", {}).items():
             if is_wireguard(net):
                 yield RotateWireguardButton(coordinator, net_id)
@@ -105,3 +107,80 @@ class RotateWlanButton(ControllerEntity, ButtonEntity):
             await async_rotate_wlan(self.coordinator, wlan, 24, notify=True)
         except UniFiApiError as err:
             raise HomeAssistantError(str(err)) from err
+
+
+class SpeedtestButton(ControllerEntity, ButtonEntity):
+    """Speedtest am Gateway starten (Ergebnis nach ~1 min in den Speedtest-Sensoren)."""
+
+    _attr_icon = "mdi:speedometer"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "speedtest_run", "Speedtest starten")
+
+    async def async_press(self) -> None:
+        try:
+            await async_run_speedtest(self.coordinator)
+        except UniFiApiError as err:
+            raise HomeAssistantError(str(err)) from err
+
+
+class BackupButton(ControllerEntity, ButtonEntity):
+    """Controller-Backup erzeugen, herunterladen und unter /config/unifi_controller_backups ablegen."""
+
+    _attr_icon = "mdi:content-save-cog"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "controller_backup_run", "Controller-Backup erstellen")
+
+    async def async_press(self) -> None:
+        try:
+            await async_create_backup(self.coordinator)
+        except UniFiApiError as err:
+            raise HomeAssistantError(str(err)) from err
+
+
+async def async_run_speedtest(coordinator: UniFiCoordinator) -> None:
+    await coordinator.client.request("POST", "cmd/devmgr", {"cmd": "speedtest"})
+
+    # Ergebnis kommt verzögert – Konfig (inkl. Speedtest-Verlauf) in 90 s neu laden
+    def _later(_now=None) -> None:
+        coordinator._force_config = True  # noqa: SLF001
+        coordinator.hass.async_create_task(coordinator.async_refresh())
+
+    coordinator.hass.loop.call_later(90, _later)
+
+
+BACKUP_DIR = "unifi_controller_backups"
+BACKUP_KEEP = 10
+
+
+def _save_backup(config_dir: str, data: bytes, version: str) -> str:
+    import os  # noqa: PLC0415
+    from datetime import datetime  # noqa: PLC0415
+
+    folder = os.path.join(config_dir, BACKUP_DIR)
+    os.makedirs(folder, exist_ok=True)
+    name = f"unifi_{version}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.unf"
+    path = os.path.join(folder, name)
+    with open(path, "wb") as fh:
+        fh.write(data)
+    files = sorted(f for f in os.listdir(folder) if f.endswith(".unf"))
+    for old in files[:-BACKUP_KEEP]:
+        os.remove(os.path.join(folder, old))
+    return path
+
+
+async def async_create_backup(coordinator: UniFiCoordinator) -> dict:
+    """Backup am Controller erzeugen, herunterladen und unter /config ablegen."""
+    res = await coordinator.client.request("POST", "cmd/backup", {"cmd": "backup", "days": 0})
+    url = (res[0] if isinstance(res, list) and res else res or {}).get("url")
+    if not url:
+        raise UniFiApiError("Controller hat keine Backup-Datei geliefert")
+    data = await coordinator.client.download(url)
+    if len(data) < 1024:
+        raise UniFiApiError(f"Backup-Datei unplausibel klein ({len(data)} Byte)")
+    version = coordinator.data.sysinfo.get("version", "x") if coordinator.data else "x"
+    path = await coordinator.hass.async_add_executor_job(
+        _save_backup, coordinator.hass.config.config_dir, data, version)
+    return {"path": path, "size_kb": round(len(data) / 1024)}
