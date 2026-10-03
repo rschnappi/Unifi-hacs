@@ -259,3 +259,107 @@ set_wlan:
       selector:
         text:
           type: password
+get_flows:
+  fields:
+    config_entry_id: *id001
+    minutes:
+      selector:
+        number:
+          min: 1
+          max: 1440
+          unit_of_measurement: min
+          mode: box
+    client:
+      example: Google Home Mini
+      selector:
+        text: {}
+    action:
+      selector:
+        select:
+          options:
+          - blocked
+          - allowed
+          - all
+    policy:
+      example: IoT -> Gateway
+      selector:
+        text: {}
+    destination:
+      selector:
+        text: {}
+    limit:
+      selector:
+        number:
+          min: 1
+          max: 500
+          mode: box
+create_vpn_client:
+  fields:
+    config_entry_id: *id001
+    name:
+      required: true
+      example: Handy Sophie
+      selector:
+        text: {}
+    vpn:
+      example: One-Click VPN
+      selector:
+        text: {}
+    allowed_ips:
+      example: 0.0.0.0/0, ::/0
+      selector:
+        text: {}
+    dns:
+      selector:
+        text: {}
+    endpoint:
+      example: vpn.example.com
+      selector:
+        text: {}
+    notify:
+      selector:
+        boolean: {}
+delete_vpn_client:
+  fields:
+    config_entry_id: *id001
+    name:
+      required: true
+      selector:
+        text: {}
+    vpn:
+      selector:
+        text: {}
+run_speedtest:
+  fields:
+    config_entry_id: *id001
+create_backup:
+  fields:
+    config_entry_id: *id001
+set_app_block:
+  fields:
+    config_entry_id: *id001
+    network:
+      required: true
+      example: Benjamin
+      selector:
+        text: {}
+    app:
+      required: true
+      selector:
+        select:
+          options:
+          - YouTube
+          - TikTok
+          - Instagram
+          - Snapchat
+          - WhatsApp
+          - Roblox
+          - Fortnite
+          - Minecraft
+          - Twitch
+          - Discord
+          - Netflix
+    blocked:
+      required: true
+      selector:
+        boolean: {}
