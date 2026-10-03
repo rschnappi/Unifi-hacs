@@ -1,4 +1,4 @@
-"""Schalter: alle Config-Objekte (WLAN, Netze, VPN, FW …), Länder-Blocking, Geräte, Clients."""
+"""Schalter: Config-Objekte (WLAN, Netze, VPN, FW …), Länder-Blocking, App-Sperren, Geräte, Clients."""
 from __future__ import annotations
 
 from typing import Any
@@ -13,6 +13,7 @@ from .api import UniFiApiError
 from .const import CONF_CLIENT_SWITCHES, CONF_SWITCH_GROUPS
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
+from .flows import APP_DOMAINS, DEFAULT_BLOCK_APPS
 from .region import async_apply, country_names, state as region_state, zone_id
 from .resources import (
     SWITCH_GROUP_KEYS,
@@ -47,6 +48,10 @@ async def async_setup_entry(
                 yield ResourceSwitch(coordinator, group, obj_id)
         if zone_id(data, "external") and region_state(data)["zones"]:
             yield RegionSwitch(coordinator)
+        for nid in coordinator.apps.network_ids:
+            if nid in data.config.get("networks", {}):
+                for app in APP_DOMAINS:
+                    yield AppBlockSwitch(coordinator, nid, app)
         for mac, dev in data.devices.items():
             if "led_override" in dev or dev.get("type") in ("uap", "usw"):
                 yield LedSwitch(coordinator, mac)
@@ -259,3 +264,85 @@ class ClientBlockSwitch(ControllerEntity, SwitchEntity):
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self.coordinator.async_command(
             self.coordinator.client.stamgr("unblock-sta", self._mac))
+
+
+# ------------------------------------------------------------------ App-Sperren
+APP_RULE_PREFIX = "HA App-Sperre"
+
+
+def app_rule_name(net_name: str, app: str) -> str:
+    return f"{APP_RULE_PREFIX} {net_name}: {app}"
+
+
+def find_app_rule(coordinator: UniFiCoordinator, net_name: str, app: str) -> dict | None:
+    want = app_rule_name(net_name, app)
+    for r in coordinator.data.config.get("trafficrules", {}).values():
+        if r.get("description") == want:
+            return r
+    return None
+
+
+async def async_set_app_block(coordinator: UniFiCoordinator, net_id: str, app: str,
+                              blocked: bool) -> None:
+    net = coordinator.data.config["networks"][net_id]
+    name = object_name(net)
+    rule = find_app_rule(coordinator, name, app)
+    if rule is not None:
+        await coordinator.async_update_object("trafficrules", rule, {"enabled": blocked})
+        return
+    if not blocked:
+        return
+    await coordinator.async_command(coordinator.client.create_object("v2/trafficrules", {
+        "action": "BLOCK", "app_category_ids": [], "app_ids": [],
+        "bandwidth_limit": {"download_limit_kbps": 1024, "enabled": False,
+                            "upload_limit_kbps": 1024},
+        "description": app_rule_name(name, app),
+        "domains": [{"domain": d, "port_ranges": [], "ports": []} for d in APP_DOMAINS[app]],
+        "enabled": True, "ip_addresses": [], "ip_ranges": [], "matching_target": "DOMAIN",
+        "network_ids": [], "regions": [],
+        "schedule": {"mode": "ALWAYS", "repeat_on_days": [], "time_all_day": False},
+        "target_devices": [{"network_id": net_id, "type": "NETWORK"}],
+    }))
+
+
+class AppBlockSwitch(ControllerEntity, SwitchEntity):
+    """EIN = App im Netz gesperrt (Traffic-Regel mit den App-Domains)."""
+
+    _attr_icon = "mdi:cellphone-remove"
+
+    def __init__(self, coordinator: UniFiCoordinator, net_id: str, app: str) -> None:
+        net = coordinator.data.config["networks"][net_id]
+        super().__init__(coordinator, f"app_block_{net_id}_{app.lower()}",
+                         f"App-Sperre {object_name(net)} {app}")
+        self._net, self._app = net_id, app
+        self._attr_entity_registry_enabled_default = app in DEFAULT_BLOCK_APPS
+
+    @property
+    def _net_name(self) -> str | None:
+        net = self.coordinator.data.config.get("networks", {}).get(self._net)
+        return object_name(net) if net else None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._net_name is not None
+
+    @property
+    def is_on(self) -> bool:
+        r = find_app_rule(self.coordinator, self._net_name or "", self._app)
+        return bool(r and r.get("enabled"))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"domains": APP_DOMAINS[self._app]}
+
+    async def _set(self, value: bool) -> None:
+        try:
+            await async_set_app_block(self.coordinator, self._net, self._app, value)
+        except UniFiApiError as err:
+            raise HomeAssistantError(str(err)) from err
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set(False)
