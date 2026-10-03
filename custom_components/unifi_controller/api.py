@@ -111,6 +111,20 @@ class UniFiClient:
             return data.get("data", [])
         return data
 
+    async def download(self, url_path: str) -> bytes:
+        """Binärdatei vom Network-Controller laden (z. B. /dl/backup/…)."""
+        if not url_path.startswith("/dl/") or ".." in url_path:
+            raise UniFiApiError("Download-Pfad nicht erlaubt")
+        url = f"https://{self.host}/proxy/network{url_path}"
+        try:
+            async with asyncio.timeout(120):
+                async with self._session.get(url, headers={"X-API-KEY": self._api_key}) as resp:
+                    if resp.status >= 400:
+                        raise UniFiApiError(f"HTTP {resp.status} beim Download {url_path}")
+                    return await resp.read()
+        except (aiohttp.ClientError, TimeoutError) as err:
+            raise UniFiApiError(f"Download fehlgeschlagen: {err}") from err
+
     # ----------------------------------------------------------------- reads
     async def get_sysinfo(self) -> dict[str, Any]:
         data = await self.request("GET", "stat/sysinfo")
