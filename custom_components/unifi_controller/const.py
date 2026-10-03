@@ -12,6 +12,7 @@ PLATFORMS: list[Platform] = [
     Platform.EVENT,
     Platform.SENSOR,
     Platform.SWITCH,
+    Platform.UPDATE,
 ]
 
 CONF_SITE = "site"
@@ -30,6 +31,9 @@ DEFAULT_SCAN_INTERVAL = 30
 DEFAULT_CONFIG_INTERVAL = 120
 
 CONF_API_KEY = "api_key"
+CONF_NEW_CLIENT_NOTIFY = "new_client_notify"
+CONF_KID_NETWORKS = "kid_networks"
+CONF_VPN_ENDPOINT = "vpn_endpoint"
 
 # Logs / Fail2Ban
 CONF_LOGS = "logs_enabled"
@@ -61,3 +65,4 @@ BAN_PLACEHOLDER = "192.0.2.1"   # TEST-NET-1, hält die Gruppe nicht leer
 EVENT_LOG = f"{DOMAIN}_log"
 EVENT_ALERT = f"{DOMAIN}_alert"
 EVENT_BAN = f"{DOMAIN}_ban"
+EVENT_NEW_CLIENT = f"{DOMAIN}_new_client"
