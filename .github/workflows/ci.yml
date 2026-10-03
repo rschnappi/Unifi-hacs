@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: "3.13"}
+        with: {python-version: "3.14"}
       - run: pip install ruff pyyaml
       - name: Python-Syntax + undefinierte Namen
         run: |
@@ -83,7 +83,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
-        with: {python-version: "3.13", cache: pip}
+        with: {python-version: "3.14"}   # aktuelles Home Assistant braucht Python 3.14
       - run: pip install homeassistant segno
       - name: Alle Module importieren
         run: |
@@ -177,4 +177,3 @@ jobs:
           } > notes.md
           gh release create "${{ steps.v.outputs.tag }}" unifi_controller.zip \
             --title "${{ steps.v.outputs.tag }}" --notes-file notes.md --verify-tag
-            
