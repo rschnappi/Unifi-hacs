@@ -3,8 +3,8 @@
 Home-Assistant-Integration, die einen **UniFi Network Controller komplett** in Home Assistant bringt:
 Netzwerke/VLANs, WLANs, zonenbasierte Firewall, VPN, Traffic-Regeln, Portweiterleitungen, DNS,
 Geräte, Clients – plus das **System-Log** des Controllers, ein eingebautes **Fail2Ban** und **Länder-Blocking**.
-Zugriff ausschließlich über den offiziellen **API-Key** von UniFi OS, keine Benutzer/Passwort-Anmeldung,
-keine externen Python-Abhängigkeiten.
+Zugriff ausschließlich über den offiziellen **API-Key** von UniFi OS, keine Benutzer/Passwort-Anmeldung;
+einzige Zusatz-Bibliothek ist `segno` (QR-Codes).
 
 [![Open in HACS](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=rschnappi&repository=Unifi-hacs&category=integration)
 [![Integration hinzufügen](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=unifi_controller)
@@ -27,6 +27,10 @@ Getestet mit UDM Pro SE, UniFi OS 5 / Network 10.6. Sollte mit allen UniFi-OS-Ko
 | Logs | System-Log als Logbuch-Einträge, Tageszähler, letzte Sicherheitsmeldung, Events, optional Log-Datei |
 | Fail2Ban | auffällige öffentliche IPs automatisch in eine UniFi-Adressgruppe → Firewall blockt (IPS-Treffer sofort, HA-Login-Fehlversuche mit Schwelle, Wiederholungstäter dauerhaft) |
 | Länder-Blocking | nur erlaubte Länder + Ausnahmen (z. B. Claude) von außen, als Zonen-Policies |
+| Diagnose | Traffic-Flows abfragen („warum wird X geblockt?“), Alarm bei neuem Gerät |
+| VPN-Zugänge | WireGuard-Clients in HA anlegen/löschen – Konfiguration + QR-Code als Benachrichtigung |
+| Kinder | App-Nutzung pro Kindernetz (YouTube, TikTok, Roblox …), App-Sperren per Schalter |
+| Betrieb | Firmware-Updates (Update-Entitäten), Speedtest, WAN1/WAN2-Status, Port-Status, Temperaturen, Controller-Backup |
 | Alles andere | generische Services zum Lesen/Ändern/Anlegen/Löschen jedes Config-Objekts + roher API-Zugriff |
 
 Neue Objekte (Policy angelegt, VLAN dazu, neuer AP …) erscheinen automatisch, gelöschte werden unavailable.
@@ -69,6 +73,9 @@ Drei Bereiche: **Allgemein & Schalter**, **Logs & Fail2Ban**, **Länder-Blocking
 | Abfrageintervall Konfiguration | 120 s | Netze, Policies, WLANs … – nach jedem Schreibzugriff sofort |
 | Schalter anlegen für | alle | welche Objektgruppen als Schalter erscheinen |
 | Sperr-Schalter für benannte Clients | aus | ein Schalter pro Client mit Namen |
+| Benachrichtigung bei neuem Gerät | an | siehe *Diagnose* |
+| Kindernetze | Zone „Kinder“ | App-Nutzung + App-Sperren |
+| VPN-Endpunkt | WAN-IP | Hostname für neue VPN-Zugänge |
 
 ## Entities
 
@@ -85,7 +92,7 @@ Mit Präfix `Netz` (Beispiele aus einer echten Installation):
 | `sensor.netz_unifi_netzwerk_<netz>_clients` | Clients im Netz, VLAN/Subnetz/DHCP als Attribute |
 | `switch.netz_unifi_vpn_<vpn>` / `sensor.netz_unifi_vpn_<vpn>_clients` | VPN |
 | `button.netz_unifi_vpn_<vpn>_schlussel_neu_erzeugen` | neuen WireGuard-Serverschlüssel erzeugen |
-| `switch.netz_unifi_fw_<policy>` | eigene Firewall-Policy (vordefinierte werden ausgeblendet) |
+| `switch.netz_unifi_fw_<policy>` | eigene Firewall-Policy (vordefinierte werden ausgeblendet; Entity bleibt bei Neuanlage gleichen Namens erhalten) |
 | `switch.netz_unifi_traffic_regel_<name>` / `_traffic_route_<name>` / `_qos_<name>` | Traffic & QoS |
 | `switch.netz_unifi_portweiterleitung_<name>` / `_route_<name>` / `_dns_<name>` | Portweiterleitung, Route, DNS |
 | `switch.netz_unifi_wlan_<ssid>` | WLAN ein/aus |
@@ -95,7 +102,7 @@ Mit Präfix `Netz` (Beispiele aus einer echten Installation):
 | `switch.netz_<gerät>_led`, `button.netz_<gerät>_neustart` | LED, Neustart |
 | `switch.netz_<gerät>_port_<n>_poe`, `button.netz_<gerät>_port_<n>_power_cycle` | *(deaktiviert)* PoE je Port |
 
-Logs, Fail2Ban und Länder-Blocking: siehe unten.
+Logs, Fail2Ban, Länder-Blocking, Diagnose, VPN-Zugänge, Kinder und Betrieb: siehe unten.
 
 Passwörter, Schlüssel, PSKs, Tokens und Zertifikate (`x_*`-Felder und alles mit key/psk/token/secret/password/certificate
 im Namen) tauchen **nie** in Attributen, Diagnosen oder Service-Antworten auf – außer man fordert sie mit
@@ -112,6 +119,10 @@ im Namen) tauchen **nie** in Attributen, Diagnosen oder Service-Antworten auf �
 | `unifi_controller.get_logs` | System-Log abfragen (`hours`, `category`, `filter`) |
 | `unifi_controller.ban_ip` / `unban_ip` / `get_bans` | Fail2Ban manuell |
 | `unifi_controller.set_region_blocking` | Länder-Blocking setzen/ergänzen |
+| `unifi_controller.get_flows` | Traffic-Flows abfragen („warum wird X geblockt?“) |
+| `unifi_controller.create_vpn_client` / `delete_vpn_client` | WireGuard-Zugang mit QR-Code anlegen / löschen |
+| `unifi_controller.set_app_block` | App in einem Netz sperren/freigeben |
+| `unifi_controller.run_speedtest` / `create_backup` | Speedtest starten / Controller-Backup nach `/config` |
 | `unifi_controller.regenerate_vpn_key` | neuen WireGuard-Serverschlüssel in HA erzeugen und setzen |
 | `unifi_controller.regenerate_wlan_password` | zufälliges WLAN-Passwort setzen |
 | `unifi_controller.block_client` / `unblock_client` / `reconnect_client` / `forget_client` | Clients |
@@ -164,14 +175,14 @@ Admin-Anmeldungen, Client-Verbindungen, VPN, Updates …) wird bei jedem Abfrage
 | Wer wurde zuletzt gesperrt? | `sensor.netz_unifi_fail2ban_letzte_sperre` |
 | Was war der letzte Angriff? | `sensor.netz_unifi_letzte_sicherheitsmeldung` (Klartext, Details als Attribute) |
 | Wie viel ist heute passiert? | `sensor.netz_unifi_ips_angriffe_heute`, `…_firewall_blocks_heute`, `…_security_events_heute`, `…_ha_login_fehlversuche_heute`, `…_fail2ban_sperren_heute`, `…_log_eintrage_heute` |
-| Verlauf mit Text | **Logbuch** – „UniFi SECURITY BLOCKED_BY_FIREWALL: … · Regel: … · Quelle → Ziel“, „UniFi HIGH THREAT_BLOCKED …“, „UniFi Fail2Ban hat … gesperrt“ |
+| Verlauf mit Text | **Logbuch** – „Firewall: Gerät (IP) → Ziel (IP) geblockt (Regel …)“, „⚠ IPS: Angriff von … geblockt“, „Fail2Ban: … gesperrt“ |
 | Automationen | `event.netz_unifi_sicherheit` (nur sicherheitsrelevant), `event.netz_unifi_log` (alles), `event.netz_unifi_fail2ban`; Bus-Events `unifi_controller_alert`, `unifi_controller_log`, `unifi_controller_ban` |
 
 „Sicherheitsrelevant“ = IPS-Treffer, Admin-Ereignisse, HA-Login-Fehlversuche und Security-Events mit
 öffentlicher Quell-IP. In der Aktivitätsanzeige aller drei Event-Entitäten steht unter **„Was ist passiert“**
-die Meldung im Klartext (Meldung · Regel · Quelle → Ziel). `event.netz_unifi_log` feuert bei **jedem** Eintrag,
+die verständliche Zusammenfassung. `event.netz_unifi_log` feuert bei **jedem** Eintrag,
 auch bei internen Firewall-Blocks – wem das Logbuch dadurch zu voll wird, blendet die Entität aus
-(die Textzeilen „UniFi …“ bleiben sichtbar):
+(die Textzeilen bleiben sichtbar):
 
 ```yaml
 logbook:
@@ -246,12 +257,71 @@ Let's Encrypt mit **DNS-Challenge** ist nicht betroffen, HTTP-/TLS-Challenge üb
 | Entity | Inhalt |
 | --- | --- |
 | `switch.netz_unifi_lander_blocking` | Rest-Block-Policies ein/aus (Allow-Regeln bleiben) |
-| `sensor.netz_unifi_lander_blocking_erlaubte_lander` | Anzahl erlaubter Länder, Zonen/Ausnahmen als Attribute |
+| `sensor.netz_unifi_lander_blocking_lander` | Anzahl erlaubter Länder, Zonen/Ausnahmen als Attribute |
 
 ```yaml
 action: unifi_controller.set_region_blocking
 data: {add: [IT]}          # Italien zusätzlich erlauben (z. B. Urlaub)
 ```
+
+## Diagnose: Flows & neue Geräte
+
+**Flows abfragen** – welche Verbindungen gab es, was wurde von welcher Regel geblockt:
+
+```yaml
+action: unifi_controller.get_flows
+data: {minutes: 30, action: blocked, policy: "IoT -> Gateway"}
+response_variable: flows      # → top: Gerät, Protokoll, Ziel, Port, Regel, Anzahl
+```
+
+Filter: `client` (Name/IP/MAC), `action` (`blocked`/`allowed`/`all`), `policy`, `destination`.
+Damit wurde z. B. gefunden, dass 97 % der IoT-Blocks mDNS-Antworten an den mDNS-Reflektor waren.
+
+**Neues Gerät im Netz** – Event `unifi_controller_new_client` (Name, Hersteller, MAC, IP, Netz, WLAN)
+und Benachrichtigung (abschaltbar unter *Allgemein*). Beim ersten Start wird nur gelernt; gemeldet
+werden nur Geräte, die UniFi seit weniger als 24 h kennt.
+
+## VPN-Zugänge (WireGuard)
+
+```yaml
+action: unifi_controller.create_vpn_client
+data: {name: "Handy Sophie"}
+```
+
+Schlüssel entstehen in HA, der Zugang wird am Controller angelegt (nächste freie IP), Konfiguration
+und **QR-Code** kommen als Benachrichtigung – in der WireGuard-App scannen. Standard: alles über VPN
+(`0.0.0.0/0, ::/0`), DNS = Gateway des VPN-Netzes, Endpunkt aus *Allgemein → VPN-Endpunkt* bzw. WAN-IP.
+Das QR-Bild liegt 15 min unter `/local/unifi_controller_vpn/<zufällig>.png` und wird dann gelöscht
+(enthält den privaten Schlüssel). Löschen: `unifi_controller.delete_vpn_client`.
+`sensor.netz_unifi_vpn_<vpn>_zugange` listet alle Zugänge.
+
+## Kinder: App-Nutzung & App-Sperren
+
+Netze unter *Allgemein → Kindernetze* (Standard: Netze der Firewall-Zone „Kinder“).
+
+- `sensor.netz_unifi_apps_<netz>_heute` – MB heute, Attribut `apps_mb` je App, `top_app`.
+  Grundlage sind die Traffic-Flows (Domains), alle 5 min; erkannt: YouTube, TikTok, Instagram,
+  Snapchat, WhatsApp, Roblox, Fortnite, Minecraft, Twitch, Discord, Netflix.
+- `switch.netz_unifi_app_sperre_<netz>_<app>` – sperrt die App im Netz per Traffic-Regel
+  „HA App-Sperre <Netz>: <App>“ (Domain-Ziel). YouTube/TikTok/Instagram/Snapchat/Roblox sind
+  aktiviert, die übrigen Schalter standardmäßig deaktiviert.
+
+```yaml
+action: unifi_controller.set_app_block
+data: {network: Benjamin, app: TikTok, blocked: true}
+```
+
+## Betrieb
+
+| Entity / Service | Inhalt |
+| --- | --- |
+| `update.netz_<gerät>_firmware` | Firmware-Update je Gerät, installierbar aus *Einstellungen → Updates* |
+| `button.netz_unifi_speedtest_starten`, `sensor.netz_unifi_speedtest_download/_upload/_latenz` | Speedtest (Fehlversuche, z. B. über eine tote WAN2, werden ignoriert) |
+| `binary_sensor.netz_<gateway>_wan1` / `_wan2`, `sensor.netz_<gateway>_aktive_wan_leitung` | WAN-Status inkl. Verfügbarkeit; Failover per Automation auf Zustandswechsel |
+| `sensor.netz_<gerät>_port_<n>` | Link-Speed (0 = kein Link); Fehler, Duplex, PoE, verbundenes Gerät, `problem: true` bei 10 Mbit/Halbduplex/vielen Fehlern |
+| `sensor.netz_<gerät>_temperatur_<sensor>` | Temperaturen (CPU, Board …) |
+| `button.netz_unifi_controller_backup_erstellen` | Backup erzeugen, herunterladen, unter `/config/unifi_controller_backups/` ablegen (letzte 10) |
+| `sensor.netz_unifi_letztes_controller_backup` | letztes automatisches Backup des Controllers |
 
 ## Migration von „UniFi Network Rules“
 
@@ -263,17 +333,33 @@ Portweiterleitungen, QoS, VPN, WLANs, LEDs). Umstieg:
 2. Automationen, Skripte und Dashboards auf die neuen Entities umstellen
 3. UniFi Network Rules deaktivieren, ein paar Tage beobachten, dann entfernen
 
-## Releases
+## Entwicklung & Releases
 
-Ein neuer Release braucht **nur einen Tag** – die Version in `manifest.json` muss nicht angepasst werden:
+Alles läuft über **eine** Pipeline (`.github/workflows/ci.yml`):
 
-```bash
-git tag v0.4.2 && git push --tags
+```
+Push auf Branch  ──►  Prüfungen  ──grün──►  PR anlegen ──► Squash-Merge in main ──► Release
+Push auf main    ──►  Prüfungen  ──grün──►  Release
 ```
 
-oder auf GitHub *Releases → Draft a new release → neuen Tag eintippen → Publish*.
-Der Workflow schreibt die Version aus dem Tag in `manifest.json`, baut `unifi_controller.zip`
-(das installiert HACS), und erzeugt die Release-Notes aus den Commit-Nachrichten seit dem letzten Tag.
+**Prüfungen:** Python-Syntax + undefinierte Namen (ruff), JSON/YAML gültig und jeder Service übersetzt,
+**hassfest**, **HACS-Validierung**, Importtest aller Module gegen ein echtes Home Assistant.
+
+**Version** = letzter Tag + Sprung aus den Commit-Nachrichten seit dem letzten Tag:
+
+| Commit-Nachricht enthält | Sprung |
+| --- | --- |
+| `BREAKING` oder `typ!:` | Major |
+| `feat…` oder `[minor]` | Minor |
+| sonst | Patch |
+| `[skip release]` – oder nur Doku/Workflows geändert | kein Release |
+
+Die Version wird beim Bauen in `manifest.json` geschrieben und als `unifi_controller.zip` an den Release
+gehängt (das installiert HACS); die Release-Notes entstehen aus den Commit-Nachrichten.
+Manuell: *Actions → CI/CD → Run workflow* (Sprung wählbar).
+
+Einmalig in den Repo-Einstellungen nötig: *Settings → Actions → General → Workflow permissions* →
+**Read and write permissions** und **Allow GitHub Actions to create and approve pull requests**.
 
 ## Hinweise
 
