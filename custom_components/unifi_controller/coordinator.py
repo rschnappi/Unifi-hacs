@@ -18,6 +18,9 @@ from .api import UniFiApiError, UniFiAuthError, UniFiClient
 from .const import (
     CONF_CLIENT_SWITCHES,
     CONF_CONFIG_INTERVAL,
+    CONF_KID_NETWORKS,
+    CONF_NEW_CLIENT_NOTIFY,
+    CONF_VPN_ENDPOINT,
     DEFAULT_CONFIG_INTERVAL,
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
@@ -74,6 +77,13 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         self._force_config = True
         self._failed: set[str] = set()
         self.logs: Any = None  # LogManager, wird in __init__.py gesetzt
+        self.vpn_endpoint: str = (entry.options.get(CONF_VPN_ENDPOINT) or "").strip()
+        from .flows import AppUsage  # noqa: PLC0415
+        from .newclients import NewClientWatcher  # noqa: PLC0415
+
+        self.new_clients = NewClientWatcher(
+            hass, self, entry.options.get(CONF_NEW_CLIENT_NOTIFY, True))
+        self.apps = AppUsage(self, entry.options.get(CONF_KID_NETWORKS))
 
     @property
     def datasets(self) -> dict[str, str]:
@@ -112,6 +122,11 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         )
         if self.logs is not None:
             await self.logs.async_poll()
+        try:
+            await self.new_clients.async_check(data.clients)
+            await self.apps.async_poll()
+        except Exception:  # noqa: BLE001 – Zusatzfunktionen dürfen den Abruf nie stoppen
+            _LOGGER.exception("Zusatzauswertung fehlgeschlagen")
         return data
 
     async def _fetch_config(self, prev: dict[str, dict[str, dict]]) -> dict[str, dict[str, dict]]:
@@ -131,7 +146,44 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
                 continue
             self._failed.discard(key)
             out[key] = _index(res, "_id")
+        await self._fetch_extras(out, prev)
         return out
+
+    async def _fetch_extras(self, out: dict[str, dict[str, dict]],
+                            prev: dict[str, dict[str, dict]]) -> None:
+        """WireGuard-Zugänge, Speedtest-Verlauf, Controller-Backups (best effort)."""
+        servers = [nid for nid, n in out.get("networks", {}).items()
+                   if n.get("vpn_type") == "wireguard-server"]
+        now = int(time.time() * 1000)
+        jobs = {
+            **{f"wg:{nid}": self.client.request("GET", f"v2/wireguard/{nid}/users")
+               for nid in servers},
+            "speedtests": self.client.request("POST", "stat/report/archive.speedtest", {
+                "attrs": ["xput_download", "xput_upload", "latency", "time"],
+                "start": now - 30 * 86_400_000, "end": now}),
+            "backups": self.client.request("POST", "cmd/backup", {"cmd": "list-backups"}),
+        }
+        results = await asyncio.gather(*jobs.values(), return_exceptions=True)
+        wg: dict[str, dict] = {}
+        for key, res in zip(jobs, results, strict=True):
+            name = "wg_users" if key.startswith("wg:") else key
+            if isinstance(res, BaseException):
+                if name not in self._failed:
+                    _LOGGER.debug("Zusatzdaten %s nicht verfügbar: %s", name, res)
+                    self._failed.add(name)
+                if name == "wg_users":
+                    wg.update(prev.get("wg_users", {}))
+                else:
+                    out[name] = prev.get(name, {})
+                continue
+            items = res.get("data", []) if isinstance(res, dict) else res or []
+            if name == "wg_users":
+                wg.update(_index(items, "_id"))
+            elif name == "backups":
+                out[name] = {b.get("filename", str(i)): b for i, b in enumerate(items)}
+            else:
+                out[name] = _index(items, "_id")
+        out["wg_users"] = wg
 
     def find(self, dataset: str, ident: str) -> dict:
         """Objekt per _id oder eindeutigem Namen finden."""
