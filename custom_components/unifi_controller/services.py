@@ -1,4 +1,4 @@
-"""Services: generische CRUD-Operationen, Logs/Fail2Ban, Länder-Blocking, Secrets, Aktionen."""
+"""Services: CRUD, Logs/Fail2Ban, Länder-Blocking, Flows, VPN-Zugänge, Betrieb, App-Sperren, Aktionen."""
 from __future__ import annotations
 
 import ipaddress
@@ -16,6 +16,7 @@ from homeassistant.helpers import config_validation as cv
 from .api import UniFiApiError
 from .const import DOMAIN
 from .coordinator import UniFiCoordinator
+from .flows import APP_DOMAINS, async_query
 from .logs import parse_entry
 from .region import async_apply, country_names
 from .resources import DATASETS, object_name, redact
@@ -173,6 +174,47 @@ def async_setup_services(hass: HomeAssistant) -> None:
             wireguard=call.data.get("wireguard")))
         return {**st, "names": country_names(st["countries"])}
 
+    # ------------------------------------------------------------ Flows / VPN / Betrieb / Apps
+    async def get_flows(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        return await _run(async_query(
+            c, minutes=call.data["minutes"], client=call.data.get("client"),
+            action=call.data["action"], policy=call.data.get("policy"),
+            destination=call.data.get("destination"), limit=call.data["limit"]))
+
+    async def create_vpn_client(call: ServiceCall) -> ServiceResponse:
+        from .wireguard import async_create_client  # noqa: PLC0415
+
+        c = _coordinator(hass, call)
+        res = await _run(async_create_client(
+            c, name=call.data["name"], vpn=call.data.get("vpn"),
+            allowed_ips=call.data.get("allowed_ips"), dns=call.data.get("dns"),
+            endpoint=call.data.get("endpoint"), notify=call.data["notify"]))
+        return res if call.return_response else {k: v for k, v in res.items() if k != "config"}
+
+    async def delete_vpn_client(call: ServiceCall) -> ServiceResponse:
+        from .wireguard import async_delete_client  # noqa: PLC0415
+
+        c = _coordinator(hass, call)
+        return await _run(async_delete_client(c, name=call.data["name"], vpn=call.data.get("vpn")))
+
+    async def run_speedtest(call: ServiceCall) -> None:
+        from .button import async_run_speedtest  # noqa: PLC0415
+
+        await _run(async_run_speedtest(_coordinator(hass, call)))
+
+    async def create_backup(call: ServiceCall) -> ServiceResponse:
+        from .button import async_create_backup  # noqa: PLC0415
+
+        return await _run(async_create_backup(_coordinator(hass, call)))
+
+    async def set_app_block(call: ServiceCall) -> None:
+        from .switch import async_set_app_block  # noqa: PLC0415
+
+        c = _coordinator(hass, call)
+        net = _find(c, "networks", call.data["network"])
+        await _run(async_set_app_block(c, net["_id"], call.data["app"], call.data["blocked"]))
+
     # ------------------------------------------------------------ Aktionen
     async def stamgr(cmd: str, call: ServiceCall, **extra: Any) -> None:
         c = _coordinator(hass, call)
@@ -294,6 +336,36 @@ def async_setup_services(hass: HomeAssistant) -> None:
         vol.Optional("zones"): vol.All(cv.ensure_list, [cv.string]),
         vol.Optional("wireguard"): cv.boolean,
     }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "get_flows", get_flows, schema=vol.Schema({
+        **BASE,
+        vol.Optional("minutes", default=30): vol.All(vol.Coerce(int), vol.Range(min=1, max=1440)),
+        vol.Optional("client"): cv.string,
+        vol.Optional("action", default="blocked"): vol.In(["blocked", "allowed", "all"]),
+        vol.Optional("policy"): cv.string,
+        vol.Optional("destination"): cv.string,
+        vol.Optional("limit", default=50): vol.All(vol.Coerce(int), vol.Range(min=1, max=500)),
+    }), supports_response=SupportsResponse.ONLY)
+    reg(DOMAIN, "create_vpn_client", create_vpn_client, schema=vol.Schema({
+        **BASE,
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=64)),
+        vol.Optional("vpn"): cv.string,
+        vol.Optional("allowed_ips"): cv.string,
+        vol.Optional("dns"): cv.string,
+        vol.Optional("endpoint"): cv.string,
+        vol.Optional("notify", default=True): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "delete_vpn_client", delete_vpn_client, schema=vol.Schema({
+        **BASE, vol.Required("name"): cv.string, vol.Optional("vpn"): cv.string,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "run_speedtest", run_speedtest, schema=vol.Schema(BASE))
+    reg(DOMAIN, "create_backup", create_backup, schema=vol.Schema(BASE),
+        supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "set_app_block", set_app_block, schema=vol.Schema({
+        **BASE,
+        vol.Required("network"): cv.string,
+        vol.Required("app"): vol.In(list(APP_DOMAINS)),
+        vol.Required("blocked"): cv.boolean,
+    }))
     reg(DOMAIN, "get_bans", get_bans, schema=vol.Schema(BASE),
         supports_response=SupportsResponse.ONLY)
     for name, func in (
