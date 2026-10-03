@@ -99,6 +99,7 @@ class SwitchGroup:
     field: str = "enabled"
     suffix: str = ""
     uid: str | None = None
+    by_name: bool = False   # Unique-ID am Namen statt an der UniFi-ID (übersteht Neuanlage)
     icon: str = "mdi:toggle-switch"
     filter: Callable[[dict], bool] = lambda o: True
     attrs: Callable[[dict, dict], dict] = lambda o, c: scalar_attrs(o)
@@ -127,15 +128,31 @@ SWITCH_GROUPS: tuple[SwitchGroup, ...] = (
     SwitchGroup(
         key="firewall_policies", dataset="firewall_policies", label="FW",
         icon="mdi:shield-lock", filter=lambda o: not o.get("predefined"), attrs=_fw_attrs,
+        by_name=True,
     ),
     SwitchGroup(key="trafficrules", dataset="trafficrules", label="Traffic-Regel",
-                icon="mdi:traffic-light"),
+                icon="mdi:traffic-light", by_name=True),
     SwitchGroup(key="trafficroutes", dataset="trafficroutes", label="Traffic-Route",
-                icon="mdi:routes"),
+                icon="mdi:routes", by_name=True),
     SwitchGroup(key="portforwards", dataset="portforwards", label="Portweiterleitung",
                 icon="mdi:router-network"),
-    SwitchGroup(key="qos_rules", dataset="qos_rules", label="QoS", icon="mdi:speedometer"),
+    SwitchGroup(key="qos_rules", dataset="qos_rules", label="QoS", icon="mdi:speedometer",
+                by_name=True),
     SwitchGroup(key="routes", dataset="routes", label="Route", icon="mdi:routes"),
     SwitchGroup(key="dns_records", dataset="dns_records", label="DNS", icon="mdi:dns"),
 )
 SWITCH_GROUP_KEYS = [g.key for g in SWITCH_GROUPS]
+
+
+def name_key(obj: dict) -> str:
+    """Stabiler Schlüssel aus dem Objektnamen (für Unique-IDs)."""
+    from homeassistant.util import slugify  # noqa: PLC0415
+
+    return slugify(object_name(obj)) or str(obj.get("_id", ""))
+
+
+def switch_suffix(group: SwitchGroup, obj_id: str, obj: dict) -> str:
+    """Unique-ID-Suffix eines Schalters."""
+    if group.by_name:
+        return f"{group.uid_prefix}_name_{name_key(obj)}"
+    return f"{group.uid_prefix}_{obj_id}"
