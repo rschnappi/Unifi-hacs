@@ -1,4 +1,4 @@
-"""Binärsensoren: Gerät online, Update verfügbar, Internet, Fail2Ban aktiv."""
+"""Binärsensoren: Gerät online, Update verfügbar, Internet, WAN1/WAN2, Fail2Ban aktiv."""
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
@@ -24,9 +24,12 @@ async def async_setup_entry(
         yield InternetSensor(coordinator)
         if coordinator.logs:
             yield Fail2BanActive(coordinator)
-        for mac in coordinator.data.devices:
+        for mac, dev in coordinator.data.devices.items():
             yield DeviceOnline(coordinator, mac)
             yield DeviceUpgradable(coordinator, mac)
+            for key in ("wan1", "wan2"):
+                if dev.get(key):
+                    yield WanOnline(coordinator, mac, key)
 
     async_add_dynamic(coordinator, async_add_entities, factory)
 
@@ -86,3 +89,31 @@ class Fail2BanActive(ControllerEntity, BinarySensorEntity):
             "ha_login": logs.ha_login, "group": logs.group_name,
             "whitelist": [str(n) for n in logs.whitelist], "log_error": logs.last_error,
         }
+
+
+class WanOnline(DeviceEntity, BinarySensorEntity):
+    """WAN-Leitung hat Link + Verfügbarkeit laut UniFi-Monitoren."""
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+
+    def __init__(self, coordinator: UniFiCoordinator, mac: str, key: str) -> None:
+        super().__init__(coordinator, mac, f"{key}_online", key.upper())
+        self._key = key
+
+    @property
+    def _wan(self) -> dict:
+        return (self.device or {}).get(self._key) or {}
+
+    @property
+    def is_on(self) -> bool:
+        return bool(self._wan.get("up"))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        dev = self.device or {}
+        stats = (dev.get("uptime_stats") or {}).get("WAN" if self._key == "wan1" else "WAN2") or {}
+        w = self._wan
+        return {"ip": w.get("ip"), "port": w.get("name"), "medium": w.get("media"),
+                "speed": w.get("speed"), "latenz_ms": w.get("latency"),
+                "verfuegbarkeit": stats.get("availability"),
+                "uptime_s": stats.get("uptime"), "downtime_s": stats.get("downtime")}
