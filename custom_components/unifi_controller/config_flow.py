@@ -38,13 +38,16 @@ from .const import (
     CONF_F2B_MAXRETRY,
     CONF_F2B_RECIDIVE,
     CONF_F2B_WHITELIST,
+    CONF_KID_NETWORKS,
     CONF_LOG_BACKFILL,
     CONF_LOG_FILE,
     CONF_LOGS,
+    CONF_NEW_CLIENT_NOTIFY,
     CONF_PREFIX,
     CONF_SECRET_NAME,
     CONF_SITE,
     CONF_SWITCH_GROUPS,
+    CONF_VPN_ENDPOINT,
     DEFAULT_BAN_GROUP,
     DEFAULT_CONFIG_INTERVAL,
     DEFAULT_F2B_BANTIME,
@@ -60,6 +63,7 @@ from .const import (
     DEFAULT_SITE,
     DOMAIN,
 )
+from .flows import default_kid_networks
 from .region import async_apply, async_country_codes, state as region_state, target_zones, zone_id
 from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS
 
@@ -255,6 +259,15 @@ class UniFiControllerOptionsFlow(OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(data={**self.config_entry.options, **user_input})
         o = self.config_entry.options
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        data = coordinator.data if coordinator else None
+        nets = {
+            nid: n.get("name", nid)
+            for nid, n in (data.config.get("networks", {}) if data else {}).items()
+            if n.get("purpose") in ("corporate", "guest")
+        }
+        kid_default = [n for n in o.get(CONF_KID_NETWORKS) or (
+            default_kid_networks(coordinator) if coordinator else []) if n in nets]
         schema = vol.Schema({
             vol.Required(CONF_PREFIX, default=o.get(CONF_PREFIX, DEFAULT_PREFIX)): str,
             vol.Required(
@@ -267,6 +280,13 @@ class UniFiControllerOptionsFlow(OptionsFlow):
                 CONF_SWITCH_GROUPS, default=o.get(CONF_SWITCH_GROUPS, SWITCH_GROUP_KEYS)
             ): cv.multi_select({g.key: GROUP_LABELS.get(g.key, g.key) for g in SWITCH_GROUPS}),
             vol.Required(CONF_CLIENT_SWITCHES, default=o.get(CONF_CLIENT_SWITCHES, False)): bool,
+            vol.Required(CONF_NEW_CLIENT_NOTIFY,
+                         default=o.get(CONF_NEW_CLIENT_NOTIFY, True)): bool,
+            vol.Optional(CONF_KID_NETWORKS, default=kid_default): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=k, label=v) for k, v in nets.items()],
+                    multiple=True, mode=SelectSelectorMode.LIST)),
+            vol.Optional(CONF_VPN_ENDPOINT, default=o.get(CONF_VPN_ENDPOINT, "")): str,
         })
         return self.async_show_form(step_id="general", data_schema=schema)
 
