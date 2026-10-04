@@ -162,6 +162,28 @@ class KidDevicesSensor(KidEntity, SensorEntity):
         return {"geraete": devs, "zugeordnet": sum(1 for d in devs if d["zugeordnet"])}
 
 
+class KidNextLockSensor(KidEntity, SensorEntity):
+    """Nächste abendliche Sperre – mit Grund (Schultag / morgen frei: Feiertag …)."""
+
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:lock-clock"
+
+    def __init__(self, coordinator: UniFiCoordinator, kid: Kid) -> None:
+        super().__init__(coordinator, kid, "next_lock", "Nächste Sperre")
+
+    @property
+    def native_value(self) -> datetime | None:
+        return self.kid.plan.get("at") if self.kid.schedule else None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        p = self.kid.plan
+        return {"art": p.get("kind"), "morgen_frei": p.get("free_tomorrow"),
+                "grund": p.get("reason"), "kalender": self.kid.free_calendars,
+                "kalender_gefiltert": self.kid.free_filter_calendars,
+                "filter": self.kid.free_filter or None, "zeitplan": self.kid.schedule}
+
+
 class KidBonusSensor(KidEntity, SensorEntity):
     _attr_device_class = SensorDeviceClass.TIMESTAMP
     _attr_icon = "mdi:timer-sand"
@@ -186,7 +208,8 @@ def kid_entities(coordinator: UniFiCoordinator, platform: str) -> dict[str, list
         elif platform == "button":
             ents = [KidBonusButton(coordinator, kid, 30), KidBonusButton(coordinator, kid, 60)]
         elif platform == "sensor":
-            ents = [KidDevicesSensor(coordinator, kid), KidBonusSensor(coordinator, kid)]
+            ents = [KidDevicesSensor(coordinator, kid), KidBonusSensor(coordinator, kid),
+                    KidNextLockSensor(coordinator, kid)]
         else:
             ents = []
         out[sid] = ents

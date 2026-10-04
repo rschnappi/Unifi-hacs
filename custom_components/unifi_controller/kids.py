@@ -1,19 +1,21 @@
 """Kinderprofile: Internet-Freigabe mit Zeitplan, Bonuszeit, Geräte-Zuordnung.
 
 Ein Kind ist ein Config-Subentry (Typ „kid“) mit einem eigenen Netz. Pro Kind gibt es zwei
-Firewall-Policies „Sperre <n> Internet“ und „Sperre <n> IoT“ (Quelle = Subnetz des Kindes).
+Firewall-Policies „Sperre <Name> Internet“ und „Sperre <Name> IoT“ (Quelle = Subnetz des Kindes).
 Online = beide Policies deaktiviert, offline = beide aktiv. Der Zustand wird immer aus der
 Internet-Policy abgelesen – die Policy ist die Wahrheit, HA speichert nur Zeiten und Bonus.
 
-Zeitplan (wie die frühere HA-Automation):
+Zeitplan:
   * morgens zur Freigabezeit → online (Bonus verfällt)
-  * abends Sperre: So–Do zur Schultag-Zeit, Fr/Sa zur Wochenend-Zeit → offline
+  * abends Sperre: ist MORGEN frei (Sa/So; jeder Termin in den „freien“ Kalendern, z. B.
+    Feiertage; in den „gefilterten“ Kalendern nur Termine mit dem Filtertext im Titel, z. B.
+    „Benjamin“ im Familienkalender) gilt die Wochenend-Zeit, sonst die Schultag-Zeit
     (läuft eine Bonuszeit, wird bis zu deren Ende verschoben)
 """
 from __future__ import annotations
 
 from collections.abc import Callable
-from datetime import datetime, time, timedelta
+from datetime import date, datetime, time, timedelta
 import ipaddress
 import logging
 from typing import TYPE_CHECKING, Any
@@ -41,14 +43,18 @@ CONF_UNLOCK = "unlock"
 CONF_LOCK_SCHOOL = "lock_school"
 CONF_LOCK_WEEKEND = "lock_weekend"
 CONF_SCHEDULE = "schedule"
+CONF_FREE_CALENDARS = "free_calendars"
+CONF_FREE_FILTER = "free_filter"
+CONF_FREE_FILTER_CALENDARS = "free_filter_calendars"
 
 DEFAULT_UNLOCK = "06:30:00"
 DEFAULT_LOCK_SCHOOL = "20:00:00"
 DEFAULT_LOCK_WEEKEND = "21:00:00"
 TIME_KEYS = (CONF_UNLOCK, CONF_LOCK_SCHOOL, CONF_LOCK_WEEKEND)
 
-SCHOOL_EVENINGS = {6, 0, 1, 2, 3}   # So, Mo–Do (date.weekday(): Mo=0 … So=6)
-WEEKEND_EVENINGS = {4, 5}           # Fr, Sa
+FREE_WEEKDAYS = {5, 6}              # Sa, So (date.weekday(): Mo=0 … So=6)
+SYNC_KEYS = (*TIME_KEYS, CONF_SCHEDULE, CONF_FREE_CALENDARS, CONF_FREE_FILTER_CALENDARS,
+             CONF_FREE_FILTER)
 VERIFY_DELAY_S = 30
 FW = "firewall_policies"
 
@@ -153,6 +159,11 @@ class Kid:
                 CONF_UNLOCK: DEFAULT_UNLOCK, CONF_LOCK_SCHOOL: DEFAULT_LOCK_SCHOOL,
                 CONF_LOCK_WEEKEND: DEFAULT_LOCK_WEEKEND}[key])
         self._state.setdefault(CONF_SCHEDULE, subentry.data.get(CONF_SCHEDULE, True))
+        self._state.setdefault(CONF_FREE_CALENDARS, list(subentry.data.get(CONF_FREE_CALENDARS) or []))
+        self._state.setdefault(CONF_FREE_FILTER_CALENDARS,
+                               list(subentry.data.get(CONF_FREE_FILTER_CALENDARS) or []))
+        self._state.setdefault(CONF_FREE_FILTER, subentry.data.get(CONF_FREE_FILTER) or "")
+        self.plan: dict[str, Any] = {}
 
     # ------------------------------------------------------------ Zustand
     @property
@@ -177,6 +188,63 @@ class Kid:
 
     def get_time(self, key: str) -> time:
         return parse_time(self._state.get(key), DEFAULT_UNLOCK)
+
+    @property
+    def free_calendars(self) -> list[str]:
+        return list(self._state.get(CONF_FREE_CALENDARS) or [])
+
+    @property
+    def free_filter_calendars(self) -> list[str]:
+        return list(self._state.get(CONF_FREE_FILTER_CALENDARS) or [])
+
+    @property
+    def free_filter(self) -> str:
+        return str(self._state.get(CONF_FREE_FILTER) or "").strip()
+
+    async def async_free_reason(self, day: date) -> str | None:
+        """Grund, warum ``day`` frei ist (Wochenende, Kalendereintrag) – sonst None."""
+        if day.weekday() in FREE_WEEKDAYS:
+            return "Wochenende"
+        needle = self.free_filter.lower()
+        groups = [(self.free_calendars, None)]
+        if needle:
+            groups.append((self.free_filter_calendars, needle))
+        start = dt_util.start_of_local_day(day)
+        for cals, flt in groups:
+            cals = [c for c in cals if self.hass.states.get(c)]
+            if not cals:
+                continue
+            try:
+                resp = await self.hass.services.async_call(
+                    "calendar", "get_events",
+                    {"entity_id": cals, "start_date_time": start,
+                     "end_date_time": start + timedelta(days=1) - timedelta(seconds=1)},
+                    blocking=True, return_response=True)
+            except Exception as err:  # noqa: BLE001 – Kalender darf den Zeitplan nie stoppen
+                _LOGGER.warning("Kind %s: Kalender nicht lesbar: %s", self.name, err)
+                continue
+            for cal in (resp or {}).values():
+                for ev in (cal or {}).get("events", []):
+                    title = str(ev.get("summary") or "")
+                    if flt is None or flt in title.lower():
+                        return title or "Kalendereintrag"
+        return None
+
+    async def async_refresh_plan(self) -> None:
+        """Nächste abendliche Sperre (Zeit + Grund) für Sensor/Anzeige berechnen."""
+        now = dt_util.now()
+        plan: dict[str, Any] = {}
+        for offset in (0, 1, 2):
+            day = now.date() + timedelta(days=offset)
+            reason = await self.async_free_reason(day + timedelta(days=1))
+            key = CONF_LOCK_WEEKEND if reason else CONF_LOCK_SCHOOL
+            at = datetime.combine(day, self.get_time(key), tzinfo=now.tzinfo)
+            if at > now:
+                plan = {"at": at, "free_tomorrow": bool(reason), "reason": reason,
+                        "kind": "Wochenende/frei" if reason else "Schultag"}
+                break
+        self.plan = plan
+        self._notify()
 
     @property
     def bonus_until(self) -> datetime | None:
@@ -270,6 +338,10 @@ class Kid:
             t = self.get_time(key)
             self._unsubs.append(async_track_time_change(
                 self.hass, handler, hour=t.hour, minute=t.minute, second=t.second))
+        # Plan nach Mitternacht neu berechnen (Kalender kann sich geändert haben)
+        self._unsubs.append(async_track_time_change(
+            self.hass, self._on_new_day, hour=0, minute=1, second=0))
+        self.hass.async_create_task(self.async_refresh_plan())
         if (until := self.bonus_until) is not None and self.online:
             self._schedule_bonus_end(until)
 
@@ -288,14 +360,26 @@ class Kid:
         self._state["bonus_until"] = None
         self._save()
         await self.async_set_online(True, "Freigabe morgens")
+        await self.async_refresh_plan()
+
+    async def _on_new_day(self, _now: datetime) -> None:
+        await self.async_refresh_plan()
 
     async def _on_lock_school(self, now: datetime) -> None:
-        if dt_util.as_local(now).weekday() in SCHOOL_EVENINGS:
-            await self._lock_by_schedule("Sperre Schultag")
+        await self._on_lock(now, CONF_LOCK_SCHOOL)
 
     async def _on_lock_weekend(self, now: datetime) -> None:
-        if dt_util.as_local(now).weekday() in WEEKEND_EVENINGS:
-            await self._lock_by_schedule("Sperre Wochenende")
+        await self._on_lock(now, CONF_LOCK_WEEKEND)
+
+    async def _on_lock(self, now: datetime, key: str) -> None:
+        """Nur die Sperrzeit anwenden, die heute Abend gilt (morgen frei → Wochenende)."""
+        tomorrow = dt_util.as_local(now).date() + timedelta(days=1)
+        reason = await self.async_free_reason(tomorrow)
+        if key != (CONF_LOCK_WEEKEND if reason else CONF_LOCK_SCHOOL):
+            return
+        label = f"Sperre {'frei morgen: ' + reason if reason else 'Schultag'}"
+        await self._lock_by_schedule(label)
+        await self.async_refresh_plan()
 
     async def _lock_by_schedule(self, reason: str) -> None:
         if not self.schedule:
@@ -325,10 +409,22 @@ class Kid:
         self._save()
         self._notify()
 
+    async def async_set_free_days(self, calendars: list[str] | None = None,
+                                  text_filter: str | None = None,
+                                  filter_calendars: list[str] | None = None) -> None:
+        if calendars is not None:
+            self._state[CONF_FREE_CALENDARS] = list(calendars)
+        if filter_calendars is not None:
+            self._state[CONF_FREE_FILTER_CALENDARS] = list(filter_calendars)
+        if text_filter is not None:
+            self._state[CONF_FREE_FILTER] = text_filter
+        self._save()
+        await self.async_refresh_plan()
+
     async def async_set_time(self, key: str, value: time) -> None:
         self._state[key] = value.isoformat()
         self._save()
-        self.async_start()
+        self.async_start()          # startet auch die Plan-Neuberechnung
         self._notify()
 
     async def async_bonus(self, minutes: int) -> datetime:
@@ -382,7 +478,7 @@ class KidManager:
             state["name"] = sub.data[CONF_NAME]
             state["network_id"] = sub.data[CONF_NETWORK]
             if sub.data.get("rev") != state.get("rev"):   # neu angelegt / neu konfiguriert
-                for key in (*TIME_KEYS, CONF_SCHEDULE):
+                for key in SYNC_KEYS:
                     if key in sub.data:
                         state[key] = sub.data[key]
                 state["rev"] = sub.data.get("rev")

@@ -387,6 +387,42 @@ add_kid:
     schedule:
       selector:
         boolean: {}
+    free_calendars:
+      selector:
+        entity:
+          domain: calendar
+          multiple: true
+    free_filter_calendars:
+      selector:
+        entity:
+          domain: calendar
+          multiple: true
+    free_filter:
+      example: Benjamin
+      selector:
+        text: {}
+kid_free_days:
+  fields:
+    config_entry_id: *id001
+    kid:
+      required: true
+      example: Sophie
+      selector:
+        text: {}
+    free_calendars:
+      selector:
+        entity:
+          domain: calendar
+          multiple: true
+    free_filter_calendars:
+      selector:
+        entity:
+          domain: calendar
+          multiple: true
+    free_filter:
+      example: Sophie
+      selector:
+        text: {}
 assign_device:
   fields:
     config_entry_id: *id001
