@@ -29,7 +29,7 @@ Getestet mit UDM Pro SE, UniFi OS 5 / Network 10.6. Sollte mit allen UniFi-OS-Ko
 | Länder-Blocking | nur erlaubte Länder + Ausnahmen (z. B. Claude) von außen, als Zonen-Policies |
 | Diagnose | Traffic-Flows abfragen („warum wird X geblockt?“), Alarm bei neuem Gerät |
 | VPN-Zugänge | WireGuard-Clients in HA anlegen/löschen – Konfiguration + QR-Code als Benachrichtigung |
-| Kinder | App-Nutzung pro Kindernetz (YouTube, TikTok, Roblox …), App-Sperren per Schalter |
+| Kinder | Kinderprofile (anlegen/ändern/löschen) mit Zeitplan, Bonuszeit und Geräte-Zuordnung; App-Nutzung und App-Sperren |
 | Betrieb | Firmware-Updates (Update-Entitäten), Speedtest, WAN1/WAN2-Status, Port-Status, Temperaturen, Controller-Backup |
 | Alles andere | generische Services zum Lesen/Ändern/Anlegen/Löschen jedes Config-Objekts + roher API-Zugriff |
 
@@ -122,6 +122,7 @@ im Namen) tauchen **nie** in Attributen, Diagnosen oder Service-Antworten auf �
 | `unifi_controller.get_flows` | Traffic-Flows abfragen („warum wird X geblockt?“) |
 | `unifi_controller.create_vpn_client` / `delete_vpn_client` | WireGuard-Zugang mit QR-Code anlegen / löschen |
 | `unifi_controller.set_app_block` | App in einem Netz sperren/freigeben |
+| `unifi_controller.add_kid` / `assign_device` / `kid_bonus` / `kid_internet` | Kinderprofile (siehe unten) |
 | `unifi_controller.run_speedtest` / `create_backup` | Speedtest starten / Controller-Backup nach `/config` |
 | `unifi_controller.regenerate_vpn_key` | neuen WireGuard-Serverschlüssel in HA erzeugen und setzen |
 | `unifi_controller.regenerate_wlan_password` | zufälliges WLAN-Passwort setzen |
@@ -294,6 +295,46 @@ und **QR-Code** kommen als Benachrichtigung – in der WireGuard-App scannen. St
 Das QR-Bild liegt 15 min unter `/local/unifi_controller_vpn/<zufällig>.png` und wird dann gelöscht
 (enthält den privaten Schlüssel). Löschen: `unifi_controller.delete_vpn_client`.
 `sensor.netz_unifi_vpn_<vpn>_zugange` listet alle Zugänge.
+
+## Kinderprofile
+
+*Einstellungen → Geräte & Dienste → UniFi Controller Manager →* **„Kind hinzufügen“**
+
+| Feld | |
+| --- | --- |
+| Name | z. B. „Lena“ |
+| Netz | bestehendes Netz der Zone „Kinder“ **oder „Neues Netz anlegen“** – VLAN und Subnetz werden automatisch vergeben und setzen das Muster fort (VLAN 3/4/5, 192.168.41/42/43 → VLAN 6, 192.168.44.0/24), DHCP, isoliert, Zone „Kinder“ |
+| Freigabe morgens, Sperre Schultag (So–Do abends), Sperre Wochenende (Fr/Sa abends) | Uhrzeiten |
+| Zeitplan aktiv | an |
+
+Die Integration legt die Policies **„Sperre <Name> Internet“** (→ External) und **„Sperre <Name> IoT“**
+(→ IoT) an und erzeugt das Gerät **„Kind <Name>“**:
+
+| Entity | |
+| --- | --- |
+| `switch.kind_<name>_internet` | EIN = online (beide Sperr-Policies aus); Attribut `bonus_bis` |
+| `switch.kind_<name>_zeitplan` | automatische Freigabe/Sperre |
+| `time.kind_<name>_freigabe_morgens` / `_sperre_schultag` / `_sperre_wochenende` | Zeiten, direkt im Dashboard änderbar |
+| `button.kind_<name>_bonus_30_min` / `_bonus_60_min` | gesperrt → sofort frei bis jetzt+x; frei → abendliche Sperre wird verschoben; mehrfach drücken verlängert |
+| `sensor.kind_<name>_gerate` | Geräte online; Attribut `geraete` (Name, MAC, IP, zugeordnet) |
+| `sensor.kind_<name>_bonus_bis` | Ende der Bonuszeit |
+
+30 Sekunden nach jeder Änderung wird geprüft, ob der Controller sie übernommen hat – sonst Benachrichtigung.
+
+**Ändern:** am Kind ⋮ → *Neu konfigurieren* (Name, Zeiten; die Policies werden mit umbenannt).
+**Löschen:** am Kind ⋮ → *Löschen* – die beiden Sperr-Policies werden entfernt, **Netz und Geräte-Zuordnungen bleiben** (Geräte bleiben im VLAN, ohne Sperren).
+
+**Geräte zuordnen** (UniFi: „Netz-Override“ am Client):
+
+```yaml
+action: unifi_controller.assign_device
+data: {mac: "aa:bb:cc:dd:ee:ff", kid: Lena}     # kid leer = Zuordnung aufheben
+```
+
+Das Gerät wird danach kurz getrennt und bekommt sofort eine Adresse aus dem Kindernetz.
+
+Weitere Services: `add_kid` (Profil per Automation/Skript anlegen, optional mit bestehendem `network`),
+`kid_bonus` (`kid`, `minutes`), `kid_internet` (`kid`, `online`).
 
 ## Kinder: App-Nutzung & App-Sperren
 
