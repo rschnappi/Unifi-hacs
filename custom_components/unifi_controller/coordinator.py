@@ -84,10 +84,12 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         self.new_clients = NewClientWatcher(
             hass, self, entry.options.get(CONF_NEW_CLIENT_NOTIFY, True))
         self.apps = AppUsage(self, entry.options.get(CONF_KID_NETWORKS))
+        self.kids: Any = None  # KidManager, wird in __init__.py gesetzt
 
     @property
     def datasets(self) -> dict[str, str]:
-        with_users = self.config_entry.options.get(CONF_CLIENT_SWITCHES, False)
+        with_users = self.config_entry.options.get(CONF_CLIENT_SWITCHES, False) or any(
+            s.subentry_type == "kid" for s in self.config_entry.subentries.values())
         return {
             k: p for k, p in DATASETS.items() if k not in OPTIONAL_DATASETS or with_users
         }

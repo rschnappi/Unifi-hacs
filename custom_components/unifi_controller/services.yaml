@@ -363,3 +363,65 @@ set_app_block:
       required: true
       selector:
         boolean: {}
+add_kid:
+  fields:
+    config_entry_id: *id001
+    name:
+      required: true
+      example: Lena
+      selector:
+        text: {}
+    network:
+      example: Lena
+      selector:
+        text: {}
+    unlock:
+      selector:
+        time: {}
+    lock_school:
+      selector:
+        time: {}
+    lock_weekend:
+      selector:
+        time: {}
+    schedule:
+      selector:
+        boolean: {}
+assign_device:
+  fields:
+    config_entry_id: *id001
+    mac:
+      required: true
+      example: aa:bb:cc:dd:ee:ff
+      selector:
+        text: {}
+    kid:
+      example: Benjamin
+      selector:
+        text: {}
+kid_bonus:
+  fields:
+    config_entry_id: *id001
+    kid:
+      required: true
+      example: Sophie
+      selector:
+        text: {}
+    minutes:
+      selector:
+        number:
+          min: 5
+          max: 480
+          unit_of_measurement: min
+kid_internet:
+  fields:
+    config_entry_id: *id001
+    kid:
+      required: true
+      example: Florian
+      selector:
+        text: {}
+    online:
+      required: true
+      selector:
+        boolean: {}

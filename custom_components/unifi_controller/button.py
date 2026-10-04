@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .api import UniFiApiError
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
+from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .resources import object_name
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan, is_wireguard
@@ -36,6 +37,8 @@ async def async_setup_entry(
                     yield PowerCycleButton(coordinator, mac, port["port_idx"])
 
     async_add_dynamic(coordinator, async_add_entities, factory)
+    for sid, ents in kid_entities(coordinator, "button").items():
+        async_add_entities(ents, config_subentry_id=sid)
 
 
 class RestartButton(DeviceEntity, ButtonEntity):
