@@ -242,7 +242,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
         else:
             net_id = await _run(async_create_network(c, name))
         data = {"name": name, "network_id": net_id, "rev": _t.time(),
-                **{k: call.data[k] for k in ("unlock", "lock_school", "lock_weekend", "schedule")
+                **{k: call.data[k] for k in ("unlock", "lock_school", "lock_weekend", "schedule",
+                                             "free_calendars", "free_filter_calendars",
+                                             "free_filter")
                    if k in call.data}}
         hass.config_entries.async_add_subentry(entry, ConfigSubentry(
             data=MappingProxyType(data), subentry_type=SUBENTRY_KID, title=name, unique_id=net_id))
@@ -261,6 +263,16 @@ def async_setup_services(hass: HomeAssistant) -> None:
         c = _coordinator(hass, call)
         until = await _run(_kid(c, call.data["kid"]).async_bonus(call.data["minutes"]))
         return {"bonus_bis": until.isoformat()}
+
+    async def kid_free_days(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        kid = _kid(c, call.data["kid"])
+        await kid.async_set_free_days(call.data.get("free_calendars"), call.data.get("free_filter"),
+                                      call.data.get("free_filter_calendars"))
+        p = kid.plan
+        return {"naechste_sperre": p["at"].isoformat() if p.get("at") else None,
+                "grund": p.get("reason"), "kalender": kid.free_calendars,
+                "kalender_gefiltert": kid.free_filter_calendars, "filter": kid.free_filter}
 
     async def kid_internet(call: ServiceCall) -> None:
         c = _coordinator(hass, call)
@@ -429,6 +441,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
         vol.Optional("lock_school"): hhmm,
         vol.Optional("lock_weekend"): hhmm,
         vol.Optional("schedule"): cv.boolean,
+        vol.Optional("free_calendars"): cv.entity_ids,
+        vol.Optional("free_filter_calendars"): cv.entity_ids,
+        vol.Optional("free_filter"): cv.string,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "kid_free_days", kid_free_days, schema=vol.Schema({
+        **BASE, vol.Required("kid"): cv.string,
+        vol.Optional("free_calendars"): cv.entity_ids,
+        vol.Optional("free_filter_calendars"): cv.entity_ids,
+        vol.Optional("free_filter"): cv.string,
     }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "assign_device", assign_device, schema=vol.Schema({
         **BASE, vol.Required("mac"): cv.string, vol.Optional("kid"): cv.string,

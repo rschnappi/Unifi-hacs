@@ -20,6 +20,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
+    EntitySelector,
+    EntitySelectorConfig,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -73,6 +75,9 @@ from .const import (
 )
 from .flows import default_kid_networks
 from .kids import (
+    CONF_FREE_CALENDARS,
+    CONF_FREE_FILTER,
+    CONF_FREE_FILTER_CALENDARS,
     CONF_LOCK_SCHOOL,
     CONF_LOCK_WEEKEND,
     CONF_NAME as KID_NAME,
@@ -249,8 +254,20 @@ class KidSubentryFlow(ConfigSubentryFlow):
             vol.Required(CONF_LOCK_WEEKEND,
                          default=d.get(CONF_LOCK_WEEKEND, DEFAULT_LOCK_WEEKEND)): TimeSelector(),
             vol.Required(KID_SCHEDULE, default=d.get(KID_SCHEDULE, True)): bool,
+            vol.Optional(CONF_FREE_CALENDARS,
+                         default=d.get(CONF_FREE_CALENDARS, self._default_calendars())):
+                EntitySelector(EntitySelectorConfig(domain="calendar", multiple=True)),
+            vol.Optional(CONF_FREE_FILTER_CALENDARS,
+                         default=d.get(CONF_FREE_FILTER_CALENDARS, [])):
+                EntitySelector(EntitySelectorConfig(domain="calendar", multiple=True)),
+            vol.Optional(CONF_FREE_FILTER, default=d.get(CONF_FREE_FILTER, d.get(KID_NAME, ""))): str,
         })
         return vol.Schema(fields)
+
+    def _default_calendars(self) -> list[str]:
+        """Vorschlag: Feiertagskalender, falls vorhanden."""
+        return [s.entity_id for s in self.hass.states.async_all("calendar")
+                if "feiertag" in s.entity_id or "holiday" in s.entity_id][:1]
 
     def _network_options(self) -> dict[str, str]:
         c = self._coordinator()
@@ -313,7 +330,10 @@ class KidSubentryFlow(ConfigSubentryFlow):
         if c and c.kids and (kid := c.kids.kids.get(sub.subentry_id)):
             current.update({k: kid.get_time(k).isoformat() for k in
                             (CONF_UNLOCK, CONF_LOCK_SCHOOL, CONF_LOCK_WEEKEND)},
-                           **{KID_SCHEDULE: kid.schedule})
+                           **{KID_SCHEDULE: kid.schedule,
+                              CONF_FREE_CALENDARS: kid.free_calendars,
+                              CONF_FREE_FILTER_CALENDARS: kid.free_filter_calendars,
+                              CONF_FREE_FILTER: kid.free_filter})
         return self.async_show_form(
             step_id="reconfigure", data_schema=self._schema(user_input or current, None),
             errors=errors)

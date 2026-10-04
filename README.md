@@ -304,8 +304,14 @@ Das QR-Bild liegt 15 min unter `/local/unifi_controller_vpn/<zufällig>.png` und
 | --- | --- |
 | Name | z. B. „Lena“ |
 | Netz | bestehendes Netz der Zone „Kinder“ **oder „Neues Netz anlegen“** – VLAN und Subnetz werden automatisch vergeben und setzen das Muster fort (VLAN 3/4/5, 192.168.41/42/43 → VLAN 6, 192.168.44.0/24), DHCP, isoliert, Zone „Kinder“ |
-| Freigabe morgens, Sperre Schultag (So–Do abends), Sperre Wochenende (Fr/Sa abends) | Uhrzeiten |
+| Freigabe morgens, Sperre Schultag, Sperre Wochenende | Uhrzeiten |
 | Zeitplan aktiv | an |
+| Kalender: jeder Termin = frei | z. B. *Feiertage in Österreich*, eigener Kalender „Schulfrei Sophie“ |
+| Kalender mit Textfilter + Filtertext | z. B. Familienkalender, Filter „Benjamin“ → nur Termine mit „Benjamin“ im Titel |
+
+**Welche Sperrzeit gilt?** Ist **morgen frei** – Samstag/Sonntag oder ein passender Kalendertermin
+(Feiertag, schulautonomer Tag, Ferien) – gilt abends die **Wochenend**-Zeit, sonst die **Schultag**-Zeit.
+Der Sonntag vor einem Feiertags-Montag ist also ein Wochenend-Abend, der letzte Ferientag ein Schultag-Abend.
 
 Die Integration legt die Policies **„Sperre <Name> Internet“** (→ External) und **„Sperre <Name> IoT“**
 (→ IoT) an und erzeugt das Gerät **„Kind <Name>“**:
@@ -318,10 +324,11 @@ Die Integration legt die Policies **„Sperre <Name> Internet“** (→ External
 | `button.kind_<name>_bonus_30_min` / `_bonus_60_min` | gesperrt → sofort frei bis jetzt+x; frei → abendliche Sperre wird verschoben; mehrfach drücken verlängert |
 | `sensor.kind_<name>_gerate` | Geräte online; Attribut `geraete` (Name, MAC, IP, zugeordnet) |
 | `sensor.kind_<name>_bonus_bis` | Ende der Bonuszeit |
+| `sensor.kind_<name>_nachste_sperre` | nächste abendliche Sperre; Attribute `art`, `morgen_frei`, `grund` (z. B. „Nationalfeiertag“) |
 
 30 Sekunden nach jeder Änderung wird geprüft, ob der Controller sie übernommen hat – sonst Benachrichtigung.
 
-**Ändern:** am Kind ⋮ → *Neu konfigurieren* (Name, Zeiten; die Policies werden mit umbenannt).
+**Ändern:** am Kind ⋮ → *Neu konfigurieren* (Name, Zeiten, freie Tage; die Policies werden mit umbenannt).
 **Löschen:** am Kind ⋮ → *Löschen* – die beiden Sperr-Policies werden entfernt, **Netz und Geräte-Zuordnungen bleiben** (Geräte bleiben im VLAN, ohne Sperren).
 
 **Geräte zuordnen** (UniFi: „Netz-Override“ am Client):
@@ -334,7 +341,8 @@ data: {mac: "aa:bb:cc:dd:ee:ff", kid: Lena}     # kid leer = Zuordnung aufheben
 Das Gerät wird danach kurz getrennt und bekommt sofort eine Adresse aus dem Kindernetz.
 
 Weitere Services: `add_kid` (Profil per Automation/Skript anlegen, optional mit bestehendem `network`),
-`kid_bonus` (`kid`, `minutes`), `kid_internet` (`kid`, `online`).
+`kid_bonus` (`kid`, `minutes`), `kid_internet` (`kid`, `online`),
+`kid_free_days` (`kid`, `free_calendars`, `free_filter_calendars`, `free_filter`).
 
 ## Kinder: App-Nutzung & App-Sperren
 
