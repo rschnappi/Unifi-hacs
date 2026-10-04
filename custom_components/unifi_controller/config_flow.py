@@ -1,4 +1,4 @@
-"""Config-, Reconfigure-, Reauth- und Options-Flow."""
+"""Config-, Reconfigure-, Reauth-, Options- und Kinderprofil-Flow."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -7,7 +7,14 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.config_entries import ConfigFlow, ConfigFlowResult, OptionsFlow
+from homeassistant.config_entries import (
+    ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
+    ConfigSubentryFlow,
+    OptionsFlow,
+    SubentryFlowResult,
+)
 from homeassistant.const import CONF_HOST, CONF_SCAN_INTERVAL, CONF_VERIFY_SSL
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import config_validation as cv
@@ -20,6 +27,7 @@ from homeassistant.helpers.selector import (
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
+    TimeSelector,
 )
 
 from .api import UniFiApiError, UniFiAuthError, UniFiClient, async_get_api_key
@@ -64,6 +72,20 @@ from .const import (
     DOMAIN,
 )
 from .flows import default_kid_networks
+from .kids import (
+    CONF_LOCK_SCHOOL,
+    CONF_LOCK_WEEKEND,
+    CONF_NAME as KID_NAME,
+    CONF_NETWORK as KID_NETWORK,
+    CONF_SCHEDULE as KID_SCHEDULE,
+    CONF_UNLOCK,
+    DEFAULT_LOCK_SCHOOL,
+    DEFAULT_LOCK_WEEKEND,
+    DEFAULT_UNLOCK,
+    SUBENTRY_KID,
+    async_create_network,
+    kid_zone,
+)
 from .region import async_apply, async_country_codes, state as region_state, target_zones, zone_id
 from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS
 
@@ -191,6 +213,110 @@ class UniFiControllerConfigFlow(ConfigFlow, domain=DOMAIN):
     @callback
     def async_get_options_flow(config_entry) -> OptionsFlow:
         return UniFiControllerOptionsFlow()
+
+    @classmethod
+    @callback
+    def async_get_supported_subentry_types(
+        cls, config_entry: ConfigEntry
+    ) -> dict[str, type[ConfigSubentryFlow]]:
+        return {SUBENTRY_KID: KidSubentryFlow}
+
+
+NEW_NETWORK = "__new__"
+
+
+class KidSubentryFlow(ConfigSubentryFlow):
+    """Kinderprofil anlegen / ändern. Löschen über das Menü des Eintrags."""
+
+    def _coordinator(self):
+        return getattr(self._get_entry(), "runtime_data", None)
+
+    def _used_networks(self, except_id: str | None = None) -> set[str]:
+        return {s.data.get(KID_NETWORK) for sid, s in self._get_entry().subentries.items()
+                if s.subentry_type == SUBENTRY_KID and sid != except_id}
+
+    def _schema(self, d: dict[str, Any], networks: dict[str, str] | None) -> vol.Schema:
+        fields: dict[Any, Any] = {vol.Required(KID_NAME, default=d.get(KID_NAME, "")): str}
+        if networks is not None:
+            fields[vol.Required(KID_NETWORK, default=d.get(KID_NETWORK, NEW_NETWORK))] = \
+                SelectSelector(SelectSelectorConfig(
+                    options=[SelectOptionDict(value=k, label=v) for k, v in networks.items()],
+                    mode=SelectSelectorMode.DROPDOWN))
+        fields.update({
+            vol.Required(CONF_UNLOCK, default=d.get(CONF_UNLOCK, DEFAULT_UNLOCK)): TimeSelector(),
+            vol.Required(CONF_LOCK_SCHOOL,
+                         default=d.get(CONF_LOCK_SCHOOL, DEFAULT_LOCK_SCHOOL)): TimeSelector(),
+            vol.Required(CONF_LOCK_WEEKEND,
+                         default=d.get(CONF_LOCK_WEEKEND, DEFAULT_LOCK_WEEKEND)): TimeSelector(),
+            vol.Required(KID_SCHEDULE, default=d.get(KID_SCHEDULE, True)): bool,
+        })
+        return vol.Schema(fields)
+
+    def _network_options(self) -> dict[str, str]:
+        c = self._coordinator()
+        used = self._used_networks()
+        data = c.data if c else None
+        zone = kid_zone(data) if data else None
+        nets = {nid: n.get("name", nid) for nid, n in (data.config.get("networks", {}) if data else {}).items()
+                if n.get("purpose") == "corporate" and nid not in used
+                and (not zone or n.get("firewall_zone_id") == zone)}
+        return {NEW_NETWORK: "➕ Neues Netz anlegen (VLAN + Subnetz automatisch)", **nets}
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        c = self._coordinator()
+        if c is None or c.data is None:
+            return self.async_abort(reason="not_loaded")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = user_input[KID_NAME].strip()
+            names = {s.title.lower() for s in self._get_entry().subentries.values()
+                     if s.subentry_type == SUBENTRY_KID}
+            if not name:
+                errors[KID_NAME] = "name_required"
+            elif name.lower() in names:
+                errors[KID_NAME] = "name_exists"
+            else:
+                net_id = user_input[KID_NETWORK]
+                try:
+                    if net_id == NEW_NETWORK:
+                        net_id = await async_create_network(c, name)
+                except UniFiApiError:
+                    errors["base"] = "network_failed"
+                else:
+                    import time as _t  # noqa: PLC0415
+                    data = {**user_input, KID_NAME: name, KID_NETWORK: net_id, "rev": _t.time()}
+                    return self.async_create_entry(title=name, data=data, unique_id=net_id)
+        return self.async_show_form(
+            step_id="user", data_schema=self._schema(user_input or {}, self._network_options()),
+            errors=errors)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        sub = self._get_reconfigure_subentry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = user_input[KID_NAME].strip()
+            others = {s.title.lower() for sid, s in self._get_entry().subentries.items()
+                      if s.subentry_type == SUBENTRY_KID and sid != sub.subentry_id}
+            if not name:
+                errors[KID_NAME] = "name_required"
+            elif name.lower() in others:
+                errors[KID_NAME] = "name_exists"
+            else:
+                import time as _t  # noqa: PLC0415
+                return self.async_update_and_abort(
+                    self._get_entry(), sub, title=name,
+                    data={**sub.data, **user_input, KID_NAME: name, "rev": _t.time()})
+        current = dict(sub.data)
+        c = self._coordinator()
+        if c and c.kids and (kid := c.kids.kids.get(sub.subentry_id)):
+            current.update({k: kid.get_time(k).isoformat() for k in
+                            (CONF_UNLOCK, CONF_LOCK_SCHOOL, CONF_LOCK_WEEKEND)},
+                           **{KID_SCHEDULE: kid.schedule})
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=self._schema(user_input or current, None),
+            errors=errors)
 
 
 class UniFiControllerOptionsFlow(OptionsFlow):
