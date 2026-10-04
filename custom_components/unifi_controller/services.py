@@ -215,6 +215,60 @@ def async_setup_services(hass: HomeAssistant) -> None:
         net = _find(c, "networks", call.data["network"])
         await _run(async_set_app_block(c, net["_id"], call.data["app"], call.data["blocked"]))
 
+    # ------------------------------------------------------------ Kinderprofile
+    def _kid(c: UniFiCoordinator, ident: str):
+        kid = c.kids.find(ident) if c.kids else None
+        if kid is None:
+            raise ServiceValidationError(f"Kinderprofil „{ident}“ nicht gefunden")
+        return kid
+
+    async def add_kid(call: ServiceCall) -> ServiceResponse:
+        import time as _t  # noqa: PLC0415
+        from types import MappingProxyType  # noqa: PLC0415
+
+        from homeassistant.config_entries import ConfigSubentry  # noqa: PLC0415
+
+        from .kids import SUBENTRY_KID, async_create_network  # noqa: PLC0415
+
+        c = _coordinator(hass, call)
+        entry = c.config_entry
+        name = call.data["name"].strip()
+        if any(s.subentry_type == SUBENTRY_KID and s.title.lower() == name.lower()
+               for s in entry.subentries.values()):
+            raise ServiceValidationError(f"Kinderprofil „{name}“ existiert bereits")
+        network = call.data.get("network")
+        if network:
+            net_id = _find(c, "networks", network)["_id"]
+        else:
+            net_id = await _run(async_create_network(c, name))
+        data = {"name": name, "network_id": net_id, "rev": _t.time(),
+                **{k: call.data[k] for k in ("unlock", "lock_school", "lock_weekend", "schedule")
+                   if k in call.data}}
+        hass.config_entries.async_add_subentry(entry, ConfigSubentry(
+            data=MappingProxyType(data), subentry_type=SUBENTRY_KID, title=name, unique_id=net_id))
+        return {"name": name, "network_id": net_id}
+
+    async def assign_device(call: ServiceCall) -> None:
+        c = _coordinator(hass, call)
+        target = call.data.get("kid")
+        net_id = None
+        if target and target.lower() not in ("none", "keins", "-"):
+            kid = c.kids.find(target) if c.kids else None
+            net_id = kid.network_id if kid else _find(c, "networks", target)["_id"]
+        await _run(c.kids.async_assign_device(call.data["mac"], net_id))
+
+    async def kid_bonus(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        until = await _run(_kid(c, call.data["kid"]).async_bonus(call.data["minutes"]))
+        return {"bonus_bis": until.isoformat()}
+
+    async def kid_internet(call: ServiceCall) -> None:
+        c = _coordinator(hass, call)
+        kid = _kid(c, call.data["kid"])
+        if not call.data["online"]:
+            await kid.async_cancel_bonus()
+        await _run(kid.async_set_online(call.data["online"], "Service"))
+
     # ------------------------------------------------------------ Aktionen
     async def stamgr(cmd: str, call: ServiceCall, **extra: Any) -> None:
         c = _coordinator(hass, call)
@@ -365,6 +419,26 @@ def async_setup_services(hass: HomeAssistant) -> None:
         vol.Required("network"): cv.string,
         vol.Required("app"): vol.In(list(APP_DOMAINS)),
         vol.Required("blocked"): cv.boolean,
+    }))
+    hhmm = vol.All(cv.time, lambda t: t.isoformat())
+    reg(DOMAIN, "add_kid", add_kid, schema=vol.Schema({
+        **BASE,
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1, max=40)),
+        vol.Optional("network"): cv.string,
+        vol.Optional("unlock"): hhmm,
+        vol.Optional("lock_school"): hhmm,
+        vol.Optional("lock_weekend"): hhmm,
+        vol.Optional("schedule"): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "assign_device", assign_device, schema=vol.Schema({
+        **BASE, vol.Required("mac"): cv.string, vol.Optional("kid"): cv.string,
+    }))
+    reg(DOMAIN, "kid_bonus", kid_bonus, schema=vol.Schema({
+        **BASE, vol.Required("kid"): cv.string,
+        vol.Optional("minutes", default=30): vol.All(vol.Coerce(int), vol.Range(min=5, max=480)),
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "kid_internet", kid_internet, schema=vol.Schema({
+        **BASE, vol.Required("kid"): cv.string, vol.Required("online"): cv.boolean,
     }))
     reg(DOMAIN, "get_bans", get_bans, schema=vol.Schema(BASE),
         supports_response=SupportsResponse.ONLY)
