@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .api import UniFiApiError
 from .const import CONF_CLIENT_SWITCHES, CONF_SWITCH_GROUPS
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
+from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .flows import APP_DOMAINS, DEFAULT_BLOCK_APPS
 from .region import async_apply, country_names, state as region_state, zone_id
@@ -65,6 +66,8 @@ async def async_setup_entry(
                     yield ClientBlockSwitch(coordinator, mac)
 
     async_add_dynamic(coordinator, async_add_entities, factory)
+    for sid, ents in kid_entities(coordinator, "switch").items():
+        async_add_entities(ents, config_subentry_id=sid)
 
 
 # ------------------------------------------------------------ Config-Objekte
