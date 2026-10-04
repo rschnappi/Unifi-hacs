@@ -23,6 +23,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .coordinator import UniFiConfigEntry, UniFiCoordinator, UniFiData
+from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .region import country_names, state as region_state, zone_id
 from .resources import LAN_PURPOSES, VPN_PURPOSES, object_name, scalar_attrs
@@ -239,6 +240,8 @@ async def async_setup_entry(
                     yield DeviceSensor(coordinator, mac, desc)
 
     async_add_dynamic(coordinator, async_add_entities, factory)
+    for sid, ents in kid_entities(coordinator, "sensor").items():
+        async_add_entities(ents, config_subentry_id=sid)
 
 
 class ControllerSensor(ControllerEntity, SensorEntity):
