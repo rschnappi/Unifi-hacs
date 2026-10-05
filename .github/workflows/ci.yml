@@ -115,18 +115,35 @@ jobs:
       - name: PR anlegen und mergen (nur Branches)
         if: github.ref_name != 'main'
         run: |
-          TITLE="$(git log -1 --pretty=%s)"
-          BODY="$(git log --no-merges --pretty='- %s' origin/main..HEAD)"
+          git fetch origin main
+          # Nichts Neues gegenüber main (z. B. Lauf durch das bloße Anlegen des Branches) → nichts tun
+          if [ -z "$(git rev-list "origin/main..$GITHUB_SHA")" ]; then
+            echo "Keine neuen Commits gegenüber main – nichts zu tun"
+            echo "SKIP_DELIVER=1" >> "$GITHUB_ENV"; exit 0
+          fi
+          # Titel/Beschreibung aus genau dem GEPRÜFTEN Commit
+          TITLE="$(git log -1 --pretty=%s "$GITHUB_SHA")"
+          BODY="$(git log --no-merges --pretty='- %s' "origin/main..$GITHUB_SHA")"
           if ! gh pr view "$BRANCH" --json number >/dev/null 2>&1; then
             gh pr create --base main --head "$BRANCH" --title "$TITLE" --body "$BODY"
           fi
-          gh pr merge "$BRANCH" --squash --delete-branch --subject "$TITLE" --body "$BODY"
+          # Nur mergen, wenn der PR noch auf dem geprüften Commit steht – neuere Pushes
+          # werden von ihrem eigenen Lauf geprüft und gemergt.
+          HEAD_NOW="$(gh pr view "$BRANCH" --json headRefOid -q .headRefOid)"
+          if [ "$HEAD_NOW" != "$GITHUB_SHA" ]; then
+            echo "Branch wurde weiter gepusht ($HEAD_NOW) – Merge übernimmt der neuere Lauf"
+            echo "SKIP_DELIVER=1" >> "$GITHUB_ENV"; exit 0
+          fi
+          gh pr edit "$BRANCH" --title "$TITLE" >/dev/null
+          gh pr merge "$BRANCH" --squash --delete-branch --match-head-commit "$GITHUB_SHA" \
+            --subject "$TITLE" --body "$BODY"
           git fetch origin main
           git checkout -B main origin/main
 
       - name: Version bestimmen
         id: v
         run: |
+          if [ "${SKIP_DELIVER:-}" = "1" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
           LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
           LAST=${LAST:-v0.0.0}
           LOG=$(git log --pretty='%s%n%b' "${LAST}..HEAD")
