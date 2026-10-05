@@ -16,6 +16,9 @@ _LOGGER = logging.getLogger(__name__)
 
 TIMEOUT = 25
 ALLOWED_METHODS = {"GET", "POST", "PUT", "DELETE"}
+RETRY_DELAY = 0.5
+# lesende POST-Abfragen dürfen wie GET wiederholt werden
+READ_POSTS = ("v2/system-log/", "v2/traffic-flows", "stat/report/", "stat/sitedpi", "stat/stadpi")
 
 
 class UniFiApiError(HomeAssistantError):
@@ -24,6 +27,10 @@ class UniFiApiError(HomeAssistantError):
 
 class UniFiAuthError(UniFiApiError):
     """API-Key ungültig oder ohne Berechtigung."""
+
+
+class UniFiTransientError(UniFiApiError):
+    """Vorübergehender Fehler (Timeout, HTTP 5xx, kaputte Antwort) – Wiederholung sinnvoll."""
 
 
 def _read_secret(path: str, name: str) -> str | None:
@@ -79,9 +86,22 @@ class UniFiClient:
         return self._legacy + path, True
 
     async def request(self, method: str, path: str, payload: Any = None) -> Any:
+        """API-Aufruf; lesende Aufrufe werden bei vorübergehenden Fehlern einmal wiederholt."""
         method = method.upper()
         if method not in ALLOWED_METHODS:
             raise UniFiApiError(f"Methode {method} nicht erlaubt")
+        retry = method == "GET" or (
+            method == "POST" and path.strip().lstrip("/").startswith(READ_POSTS))
+        try:
+            return await self._request_once(method, path, payload)
+        except UniFiTransientError as err:
+            if not retry:
+                raise
+            _LOGGER.debug("Wiederhole %s %s nach Fehler: %s", method, path, err)
+            await asyncio.sleep(RETRY_DELAY)
+            return await self._request_once(method, path, payload)
+
+    async def _request_once(self, method: str, path: str, payload: Any = None) -> Any:
         url, legacy = self.resolve(path)
         headers = {"X-API-KEY": self._api_key, "Accept": "application/json"}
         try:
@@ -92,17 +112,19 @@ class UniFiClient:
                     text = await resp.text()
                     if resp.status in (401, 403):
                         raise UniFiAuthError(f"HTTP {resp.status}")
+                    if resp.status >= 500:
+                        raise UniFiTransientError(f"HTTP {resp.status} {path}: {text[:2000]}")
                     if resp.status >= 400:
                         raise UniFiApiError(f"HTTP {resp.status} {path}: {text[:2000]}")
         except (aiohttp.ClientError, TimeoutError) as err:
-            raise UniFiApiError(f"Verbindung zu {self.host} fehlgeschlagen: {err}") from err
+            raise UniFiTransientError(f"Verbindung zu {self.host} fehlgeschlagen: {err}") from err
 
         if not text:
             return None
         try:
             data = json.loads(text)
         except ValueError as err:
-            raise UniFiApiError(f"Keine JSON-Antwort von {path}") from err
+            raise UniFiTransientError(f"Keine JSON-Antwort von {path}") from err
 
         if legacy and isinstance(data, dict) and "meta" in data:
             meta = data.get("meta") or {}
