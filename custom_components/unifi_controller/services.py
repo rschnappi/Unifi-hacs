@@ -281,6 +281,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
             await kid.async_cancel_bonus()
         await _run(kid.async_set_online(call.data["online"], "Service"))
 
+    # ------------------------------------------------------------ Benachrichtigungen
+    async def notify(call: ServiceCall) -> ServiceResponse:
+        from .notifications import async_send  # noqa: PLC0415
+
+        c = _coordinator(hass, call)
+        sent = await async_send(hass, c.config_entry.options, call.data["category"],
+                                call.data["title"], call.data["message"], call.data.get("data"))
+        return {"empfaenger": sent}
+
     # ------------------------------------------------------------ Aktionen
     async def stamgr(cmd: str, call: ServiceCall, **extra: Any) -> None:
         c = _coordinator(hass, call)
@@ -461,6 +470,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
     reg(DOMAIN, "kid_internet", kid_internet, schema=vol.Schema({
         **BASE, vol.Required("kid"): cv.string, vol.Required("online"): cv.boolean,
     }))
+    from .notifications import NOTIFY_CATEGORIES  # noqa: PLC0415
+
+    reg(DOMAIN, "notify", notify, schema=vol.Schema({
+        **BASE,
+        vol.Required("category"): vol.In(list(NOTIFY_CATEGORIES)),
+        vol.Required("title"): cv.string,
+        vol.Required("message"): cv.string,
+        vol.Optional("data"): dict,
+    }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "get_bans", get_bans, schema=vol.Schema(BASE),
         supports_response=SupportsResponse.ONLY)
     for name, func in (
