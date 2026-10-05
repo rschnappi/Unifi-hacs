@@ -1,4 +1,4 @@
-"""Binärsensoren: Gerät online, Update verfügbar, Internet, WAN1/WAN2, Fail2Ban aktiv."""
+"""Binärsensoren: Gerät online, Update verfügbar, Internet, WAN1/WAN2, Fail2Ban aktiv, Anwesenheit."""
 from __future__ import annotations
 
 from homeassistant.components.binary_sensor import BinarySensorDeviceClass, BinarySensorEntity
@@ -8,6 +8,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
+from .presence_entities import presence_entities
 
 # UniFi-Gerätestatus: 1 verbunden, 4 Update läuft, 5 provisioniert gerade – alles „online“
 ONLINE_STATES = {1, 4, 5}
@@ -32,6 +33,8 @@ async def async_setup_entry(
                     yield WanOnline(coordinator, mac, key)
 
     async_add_dynamic(coordinator, async_add_entities, factory)
+    for sid, ents in presence_entities(coordinator, "binary_sensor").items():
+        async_add_entities(ents, config_subentry_id=sid)
 
 
 class InternetSensor(ControllerEntity, BinarySensorEntity):

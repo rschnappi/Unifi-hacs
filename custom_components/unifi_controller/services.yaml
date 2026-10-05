@@ -474,6 +474,7 @@ notify:
           - security
           - updates
           - kids
+          - presence
     title:
       required: true
       selector:

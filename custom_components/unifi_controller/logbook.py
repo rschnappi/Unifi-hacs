@@ -16,7 +16,7 @@ from homeassistant.components.logbook import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_ALERT, EVENT_BAN, EVENT_LOG
+from .const import DOMAIN, EVENT_ALERT, EVENT_BAN, EVENT_LOG, EVENT_PRESENCE
 
 ICONS = {
     "BLOCKED_BY_FIREWALL": "mdi:wall-fire",
@@ -117,6 +117,17 @@ def async_describe_events(
             ico = "mdi:shield-lock-open"
         return {LOGBOOK_ENTRY_NAME: name, LOGBOOK_ENTRY_MESSAGE: msg, LOGBOOK_ENTRY_ICON: ico}
 
+    @callback
+    def describe_presence(event: Event) -> dict[str, str]:
+        d = event.data
+        arrived = d.get("state") == "arrived"
+        name = f"{d.get('person')} {'ist angekommen' if arrived else 'ist gegangen'}"
+        if arrived and d.get("room") and d["room"] not in ("Zuhause", "Abwesend"):
+            name += f" ({d['room']})"
+        return {LOGBOOK_ENTRY_NAME: name, LOGBOOK_ENTRY_MESSAGE: str(d.get("reason") or ""),
+                LOGBOOK_ENTRY_ICON: "mdi:home-account" if arrived else "mdi:home-export-outline"}
+
     async_describe_event(DOMAIN, EVENT_LOG, describe_log)
+    async_describe_event(DOMAIN, EVENT_PRESENCE, describe_presence)
     async_describe_event(DOMAIN, EVENT_ALERT, describe_alert)
     async_describe_event(DOMAIN, EVENT_BAN, describe_ban)

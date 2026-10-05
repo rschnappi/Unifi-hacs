@@ -9,6 +9,7 @@ MANUFACTURER = "Ubiquiti"
 PLATFORMS: list[Platform] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
+    Platform.DEVICE_TRACKER,
     Platform.EVENT,
     Platform.SELECT,
     Platform.SENSOR,
@@ -68,3 +69,4 @@ EVENT_LOG = f"{DOMAIN}_log"
 EVENT_ALERT = f"{DOMAIN}_alert"
 EVENT_BAN = f"{DOMAIN}_ban"
 EVENT_NEW_CLIENT = f"{DOMAIN}_new_client"
+EVENT_PRESENCE = f"{DOMAIN}_presence"

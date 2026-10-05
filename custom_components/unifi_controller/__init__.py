@@ -16,6 +16,7 @@ from .const import CONF_SITE, DOMAIN, PLATFORMS
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .kids import KidManager
 from .logs import LogManager
+from .presence import PresenceManager
 from .resources import SWITCH_GROUPS, switch_suffix
 from .services import async_setup_services
 
@@ -46,6 +47,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: UniFiConfigEntry) -> boo
     _async_migrate_unique_ids(hass, entry, coordinator)
     coordinator.kids = KidManager(hass, coordinator)
     await coordinator.kids.async_setup()
+    coordinator.presence = PresenceManager(hass, coordinator)
+    await coordinator.presence.async_setup()
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))
@@ -92,6 +95,8 @@ async def _async_reload(hass: HomeAssistant, entry: UniFiConfigEntry) -> None:
 async def async_unload_entry(hass: HomeAssistant, entry: UniFiConfigEntry) -> bool:
     if entry.runtime_data.kids:
         entry.runtime_data.kids.async_unload()
+    if (presence := getattr(entry.runtime_data, "presence", None)) is not None:
+        presence.async_unload()
     ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if ok and entry.runtime_data.logs:
         await hass.async_add_executor_job(entry.runtime_data.logs.close)
