@@ -461,3 +461,28 @@ kid_internet:
       required: true
       selector:
         boolean: {}
+notify:
+  fields:
+    config_entry_id: *id001
+    category:
+      required: true
+      selector:
+        select:
+          options:
+          - new_device
+          - internet
+          - security
+          - updates
+          - kids
+    title:
+      required: true
+      selector:
+        text: {}
+    message:
+      required: true
+      selector:
+        text:
+          multiline: true
+    data:
+      selector:
+        object: {}

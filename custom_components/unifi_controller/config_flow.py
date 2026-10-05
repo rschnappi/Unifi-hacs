@@ -91,6 +91,7 @@ from .kids import (
     async_create_network,
     kid_zone,
 )
+from .notifications import NOTIFY_CATEGORIES, PERSISTENT as PERSISTENT_TARGET, notify_targets, option_key
 from .region import async_apply, async_country_codes, state as region_state, target_zones, zone_id
 from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS
 
@@ -341,7 +342,26 @@ class KidSubentryFlow(ConfigSubentryFlow):
 
 class UniFiControllerOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
-        return self.async_show_menu(step_id="init", menu_options=["general", "logs", "region"])
+        return self.async_show_menu(
+            step_id="init", menu_options=["general", "logs", "region", "notify"])
+
+    async def async_step_notify(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Empfänger je Benachrichtigungs-Kategorie."""
+        if user_input is not None:
+            return self.async_create_entry(data={**self.config_entry.options, **user_input})
+        o = self.config_entry.options
+        targets = notify_targets(self.hass)
+        options = [SelectOptionDict(value=k, label=v) for k, v in targets.items()]
+        schema = vol.Schema({
+            vol.Optional(option_key(cat), default=[t for t in o.get(option_key(cat), [PERSISTENT_TARGET])
+                                                   if t in targets]):
+                SelectSelector(SelectSelectorConfig(options=options, multiple=True,
+                                                    mode=SelectSelectorMode.LIST))
+            for cat in NOTIFY_CATEGORIES
+        })
+        return self.async_show_form(step_id="notify", data_schema=schema)
 
     async def async_step_region(
         self, user_input: dict[str, Any] | None = None
