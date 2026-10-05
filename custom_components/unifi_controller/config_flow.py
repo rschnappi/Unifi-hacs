@@ -1,4 +1,4 @@
-"""Config-, Reconfigure-, Reauth-, Options- und Kinderprofil-Flow."""
+"""Config-, Reconfigure-, Reauth-, Options-, Kinderprofil- und Personen-Flow."""
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -90,6 +90,19 @@ from .kids import (
     SUBENTRY_KID,
     async_create_network,
     kid_zone,
+)
+from .presence import (
+    CONF_AWAY_DELAY,
+    CONF_DEVICES as PERSON_DEVICES,
+    CONF_EXIT_APS,
+    CONF_EXIT_DELAY,
+    CONF_NAME as PERSON_NAME,
+    CONF_SOURCES,
+    DEFAULT_AWAY_DELAY,
+    DEFAULT_EXIT_DELAY,
+    SUBENTRY_PERSON,
+    ap_options,
+    device_options,
 )
 from .notifications import NOTIFY_CATEGORIES, PERSISTENT as PERSISTENT_TARGET, notify_targets, option_key
 from .region import async_apply, async_country_codes, state as region_state, target_zones, zone_id
@@ -225,7 +238,7 @@ class UniFiControllerConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
-        return {SUBENTRY_KID: KidSubentryFlow}
+        return {SUBENTRY_KID: KidSubentryFlow, SUBENTRY_PERSON: PersonSubentryFlow}
 
 
 NEW_NETWORK = "__new__"
@@ -337,6 +350,102 @@ class KidSubentryFlow(ConfigSubentryFlow):
                               CONF_FREE_FILTER: kid.free_filter})
         return self.async_show_form(
             step_id="reconfigure", data_schema=self._schema(user_input or current, None),
+            errors=errors)
+
+
+class PersonSubentryFlow(ConfigSubentryFlow):
+    """Person für die Anwesenheitserkennung anlegen / ändern."""
+
+    def _coordinator(self):
+        return getattr(self._get_entry(), "runtime_data", None)
+
+    def _names(self, except_id: str | None = None) -> set[str]:
+        return {s.title.lower() for sid, s in self._get_entry().subentries.items()
+                if s.subentry_type == SUBENTRY_PERSON and sid != except_id}
+
+    def _schema(self, d: dict[str, Any]) -> vol.Schema:
+        c = self._coordinator()
+        devs = device_options(c)
+        known = {m for m, _ in devs}
+        # bereits gewählte, dem Controller (noch) unbekannte MACs nicht verlieren
+        devs += [(m, f"{m} – unbekannt") for m in d.get(PERSON_DEVICES, []) if m not in known]
+        aps = ap_options(c)
+        return vol.Schema({
+            vol.Required(PERSON_NAME, default=d.get(PERSON_NAME, "")): str,
+            vol.Required(PERSON_DEVICES, default=d.get(PERSON_DEVICES, [])): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=m, label=lbl) for m, lbl in devs],
+                    multiple=True, mode=SelectSelectorMode.DROPDOWN, sort=False)),
+            vol.Optional(CONF_EXIT_APS, default=d.get(CONF_EXIT_APS, [])): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=m, label=n) for m, n in aps],
+                    multiple=True, mode=SelectSelectorMode.LIST)),
+            vol.Required(CONF_EXIT_DELAY, default=d.get(CONF_EXIT_DELAY, DEFAULT_EXIT_DELAY)):
+                vol.All(vol.Coerce(int), vol.Range(min=1, max=120)),
+            vol.Required(CONF_AWAY_DELAY, default=d.get(CONF_AWAY_DELAY, DEFAULT_AWAY_DELAY)):
+                vol.All(vol.Coerce(int), vol.Range(min=1, max=240)),
+            vol.Optional(CONF_SOURCES, default=d.get(CONF_SOURCES, [])): EntitySelector(
+                EntitySelectorConfig(domain=["device_tracker", "binary_sensor"], multiple=True)),
+        })
+
+    def _check(self, user_input: dict[str, Any], except_id: str | None) -> dict[str, str]:
+        errors: dict[str, str] = {}
+        name = user_input[PERSON_NAME].strip()
+        own = [e for e in user_input.get(CONF_SOURCES, [])
+               if e.startswith("device_tracker.") and self._is_own_tracker(e)]
+        if not name:
+            errors[PERSON_NAME] = "name_required"
+        elif name.lower() in self._names(except_id):
+            errors[PERSON_NAME] = "person_exists"
+        elif not user_input.get(PERSON_DEVICES) and not user_input.get(CONF_SOURCES):
+            errors["base"] = "no_devices"
+        elif own:
+            errors[CONF_SOURCES] = "own_tracker"
+        elif user_input[CONF_EXIT_DELAY] > user_input[CONF_AWAY_DELAY]:
+            errors[CONF_EXIT_DELAY] = "exit_longer"
+        return errors
+
+    def _is_own_tracker(self, entity_id: str) -> bool:
+        """Eigene Tracker als Zusatzquelle würden sich selbst bestätigen."""
+        from homeassistant.helpers import entity_registry as er  # noqa: PLC0415
+
+        ent = er.async_get(self.hass).async_get(entity_id)
+        return bool(ent and ent.config_entry_id == self._get_entry().entry_id)
+
+    @staticmethod
+    def _data(user_input: dict[str, Any]) -> dict[str, Any]:
+        return {**user_input, PERSON_NAME: user_input[PERSON_NAME].strip(),
+                PERSON_DEVICES: [m.lower() for m in user_input.get(PERSON_DEVICES, [])]}
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        c = self._coordinator()
+        if c is None or c.data is None:
+            return self.async_abort(reason="not_loaded")
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            errors = self._check(user_input, None)
+            if not errors:
+                data = self._data(user_input)
+                return self.async_create_entry(title=data[PERSON_NAME], data=data)
+        return self.async_show_form(
+            step_id="user", data_schema=self._schema(user_input or {}), errors=errors)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        c = self._coordinator()
+        if c is None or c.data is None:
+            return self.async_abort(reason="not_loaded")
+        sub = self._get_reconfigure_subentry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            errors = self._check(user_input, sub.subentry_id)
+            if not errors:
+                data = self._data(user_input)
+                return self.async_update_and_abort(
+                    self._get_entry(), sub, title=data[PERSON_NAME], data=data)
+        return self.async_show_form(
+            step_id="reconfigure", data_schema=self._schema(user_input or dict(sub.data)),
             errors=errors)
 
 
