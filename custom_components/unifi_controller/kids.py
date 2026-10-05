@@ -20,7 +20,6 @@ import ipaddress
 import logging
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.components import persistent_notification as pn
 from homeassistant.config_entries import ConfigSubentry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.event import async_track_point_in_time, async_track_time_change
@@ -325,8 +324,11 @@ class Kid:
             msg = f"{self.name} sollte {'online' if online else 'offline'} sein, aber: " \
                   + ", ".join(wrong) + " nicht übernommen."
             _LOGGER.warning(msg)
-            pn.async_create(self.hass, msg, title="Kinder-Internet: Sperre nicht übernommen",
-                            notification_id=f"{DOMAIN}_kid_{self.subentry_id}")
+            from .notifications import async_send  # noqa: PLC0415
+
+            await async_send(self.hass, self.coordinator.config_entry.options, "kids",
+                             "Kinder-Internet: Sperre nicht übernommen", msg,
+                             {"tag": f"kid_{self.subentry_id}"})
 
     # ------------------------------------------------------------ Zeitplan
     @callback
