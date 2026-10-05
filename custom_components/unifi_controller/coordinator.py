@@ -17,7 +17,6 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .api import UniFiApiError, UniFiAuthError, UniFiClient
 from .const import (
-    CONF_CLIENT_SWITCHES,
     CONF_CONFIG_INTERVAL,
     CONF_KID_NETWORKS,
     CONF_NEW_CLIENT_NOTIFY,
@@ -92,8 +91,8 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
 
     @property
     def datasets(self) -> dict[str, str]:
-        with_users = self.config_entry.options.get(CONF_CLIENT_SWITCHES, False) or any(
-            s.subentry_type == "kid" for s in self.config_entry.subentries.values())
+        # bekannte Geräte werden immer geladen (Geräteliste mit Netzwahl, Kinderprofile)
+        with_users = True
         return {
             k: p for k, p in DATASETS.items() if k not in OPTIONAL_DATASETS or with_users
         }

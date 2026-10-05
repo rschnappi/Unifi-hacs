@@ -530,9 +530,21 @@ class KidManager:
         user = self.coordinator.data.users.get(mac)
         if user is None:
             raise UniFiApiError(f"Gerät {mac} ist dem Controller nicht bekannt")
-        changes = ({"virtual_network_override_enabled": True,
-                    "virtual_network_override_id": network_id}
-                   if network_id else {"virtual_network_override_enabled": False})
+        changes: dict[str, Any] = (
+            {"virtual_network_override_enabled": True, "virtual_network_override_id": network_id}
+            if network_id else {"virtual_network_override_enabled": False})
+        # Feste IP: im Zielnetz behalten, sonst aufheben (sonst bekommt das Gerät keine Adresse)
+        if user.get("use_fixedip") and user.get("fixed_ip"):
+            net = self.coordinator.data.config.get("networks", {}).get(network_id or "")
+            try:
+                inside = bool(net) and ipaddress.ip_address(user["fixed_ip"]) in \
+                    ipaddress.ip_interface(net["ip_subnet"]).network
+            except (KeyError, ValueError):
+                inside = False
+            if inside:
+                changes["network_id"] = network_id
+            else:
+                changes["use_fixedip"] = False
         await self.coordinator.async_update_object("users", user, changes)
         if mac in self.coordinator.data.clients:
             try:
