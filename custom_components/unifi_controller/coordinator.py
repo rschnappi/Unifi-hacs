@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+from functools import cached_property
 from datetime import timedelta
 import logging
 import time
@@ -29,6 +30,8 @@ from .resources import DATASETS, OPTIONAL_DATASETS, VOLATILE
 
 _LOGGER = logging.getLogger(__name__)
 
+MAX_STALE = 3   # so viele Abrufzyklen dürfen Teile ausfallen, bevor Entitäten „nicht verfügbar“ werden
+
 type UniFiConfigEntry = ConfigEntry["UniFiCoordinator"]
 
 
@@ -42,9 +45,9 @@ class UniFiData:
     clients: dict[str, dict] = field(default_factory=dict)   # mac -> dict (online)
     config: dict[str, dict[str, dict]] = field(default_factory=dict)  # dataset -> _id -> obj
 
-    @property
+    @cached_property
     def users(self) -> dict[str, dict]:
-        """Bekannte Clients nach MAC."""
+        """Bekannte Clients nach MAC (einmal pro Abruf berechnet)."""
         return {
             str(u["mac"]).lower(): u for u in self.config.get("users", {}).values() if u.get("mac")
         }
@@ -76,6 +79,7 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         self._last_config = 0.0
         self._force_config = True
         self._failed: set[str] = set()
+        self._fast_fail: dict[str, int] = {}
         self.logs: Any = None  # LogManager, wird in __init__.py gesetzt
         self.vpn_endpoint: str = (entry.options.get(CONF_VPN_ENDPOINT) or "").strip()
         from .flows import AppUsage  # noqa: PLC0415
@@ -96,17 +100,36 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
 
     async def _async_update_data(self) -> UniFiData:
         prev = self.data or UniFiData()
-        try:
-            sysinfo, health, devices, clients = await asyncio.gather(
-                self.client.get_sysinfo(),
-                self.client.get_health(),
-                self.client.get_devices(),
-                self.client.get_clients(),
-            )
-        except UniFiAuthError as err:
-            raise ConfigEntryAuthFailed("API-Key abgelehnt") from err
-        except UniFiApiError as err:
-            raise UpdateFailed(str(err)) from err
+        names = ("sysinfo", "health", "devices", "clients")
+        results = await asyncio.gather(
+            self.client.get_sysinfo(),
+            self.client.get_health(),
+            self.client.get_devices(),
+            self.client.get_clients(),
+            return_exceptions=True,
+        )
+        fresh: dict[str, Any] = {}
+        for name, res in zip(names, results, strict=True):
+            if isinstance(res, UniFiAuthError):
+                raise ConfigEntryAuthFailed("API-Key abgelehnt") from res
+            if isinstance(res, BaseException):
+                if not isinstance(res, UniFiApiError):
+                    raise res
+                # Teilausfall: letzte Daten bis zu MAX_STALE Zyklen weiterverwenden
+                streak = self._fast_fail.get(name, 0) + 1
+                self._fast_fail[name] = streak
+                if self.data is None or streak > MAX_STALE:
+                    raise UpdateFailed(str(res)) from res
+                _LOGGER.debug("%s nicht abrufbar (%s/%s), verwende letzte Daten: %s",
+                              name, streak, MAX_STALE, res)
+                fresh[name] = None
+                continue
+            self._fast_fail.pop(name, None)
+            fresh[name] = res
+        sysinfo = fresh["sysinfo"] if fresh["sysinfo"] is not None else prev.sysinfo
+        health_idx = _index(fresh["health"], "subsystem") if fresh["health"] is not None else prev.health
+        devices_idx = _index(fresh["devices"], "mac") if fresh["devices"] is not None else prev.devices
+        clients_idx = _index(fresh["clients"], "mac") if fresh["clients"] is not None else prev.clients
 
         config = prev.config
         now = time.monotonic()
@@ -117,9 +140,9 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
 
         data = UniFiData(
             sysinfo=sysinfo or {},
-            health=_index(health, "subsystem"),
-            devices=_index(devices, "mac"),
-            clients=_index(clients, "mac"),
+            health=health_idx,
+            devices=devices_idx,
+            clients=clients_idx,
             config=config,
         )
         if self.logs is not None:
