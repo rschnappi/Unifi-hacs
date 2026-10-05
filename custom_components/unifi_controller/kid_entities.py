@@ -197,7 +197,7 @@ class KidBonusSensor(KidEntity, SensorEntity):
 
 
 def kid_entities(coordinator: UniFiCoordinator, platform: str) -> dict[str, list]:
-    """Entitäten je Kind (Subentry-ID → Liste) für eine Plattform."""
+    """Entitäten je Subentry (Kind oder Person, Subentry-ID → Liste) für eine Plattform."""
     out: dict[str, list] = {}
     manager = getattr(coordinator, "kids", None)
     for sid, kid in (manager.kids.items() if manager else []):
@@ -213,4 +213,7 @@ def kid_entities(coordinator: UniFiCoordinator, platform: str) -> dict[str, list
         else:
             ents = []
         out[sid] = ents
+    from .presence_entities import presence_entities  # noqa: PLC0415
+
+    out.update(presence_entities(coordinator, platform))
     return out
