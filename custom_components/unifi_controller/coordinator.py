@@ -44,6 +44,22 @@ class UniFiData:
     clients: dict[str, dict] = field(default_factory=dict)   # mac -> dict (online)
     config: dict[str, dict[str, dict]] = field(default_factory=dict)  # dataset -> _id -> obj
 
+    def resolve(self, dataset: str, ident: str | None) -> tuple[str | None, dict | None]:
+        """Objekt über aktuelle ``_id`` ODER frühere ``legacy_id`` finden (Network 11+)."""
+        objs = self.config.get(dataset, {})
+        if not ident:
+            return None, None
+        if ident in objs:
+            return ident, objs[ident]
+        for key, obj in objs.items():
+            if obj.get("legacy_id") == ident:
+                return key, obj
+        return None, None
+
+    def real_id(self, dataset: str, ident: str | None) -> str | None:
+        """Aktuelle ``_id`` zu einer alten oder neuen ID."""
+        return self.resolve(dataset, ident)[0]
+
     @cached_property
     def users(self) -> dict[str, dict]:
         """Bekannte Clients nach MAC (einmal pro Abruf berechnet)."""
@@ -216,6 +232,8 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         objs = (self.data.config if self.data else {}).get(dataset, {})
         if ident in objs:
             return objs[ident]
+        if self.data and (legacy := self.data.resolve(dataset, ident)[1]) is not None:
+            return legacy          # alte ID (vor Network 11)
         hits = [o for o in objs.values() if object_name(o).lower() == ident.strip().lower()]
         if len(hits) == 1:
             return hits[0]

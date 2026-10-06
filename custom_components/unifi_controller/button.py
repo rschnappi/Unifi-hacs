@@ -11,7 +11,7 @@ from .api import UniFiApiError
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
-from .resources import object_name
+from .resources import object_name, stable_id
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan, is_wireguard
 
 
@@ -75,7 +75,7 @@ class RotateWireguardButton(ControllerEntity, ButtonEntity):
 
     def __init__(self, coordinator: UniFiCoordinator, net_id: str) -> None:
         net = coordinator.data.config["networks"][net_id]
-        super().__init__(coordinator, f"rotate_wg_{net_id}",
+        super().__init__(coordinator, f"rotate_wg_{stable_id(net, net_id)}",
                          f"VPN {object_name(net)} Schlüssel neu erzeugen")
         self._id = net_id
 
@@ -98,7 +98,7 @@ class RotateWlanButton(ControllerEntity, ButtonEntity):
 
     def __init__(self, coordinator: UniFiCoordinator, wlan_id: str) -> None:
         wlan = coordinator.data.config["wlans"][wlan_id]
-        super().__init__(coordinator, f"rotate_wlan_{wlan_id}",
+        super().__init__(coordinator, f"rotate_wlan_{stable_id(wlan, wlan_id)}",
                          f"WLAN {object_name(wlan)} Passwort neu erzeugen")
         self._id = wlan_id
 
