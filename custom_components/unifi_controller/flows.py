@@ -170,7 +170,11 @@ class AppUsage:
     @property
     def network_ids(self) -> set[str]:
         if self._configured is not None:
-            return set(self._configured)
+            data = self.coordinator.data
+            if not data:
+                return set(self._configured)
+            # Optionen können noch alte IDs (vor Network 11) enthalten
+            return {data.real_id("networks", n) or n for n in self._configured}
         return set(default_kid_networks(self.coordinator))
 
     async def async_poll(self) -> None:
@@ -188,8 +192,11 @@ class AppUsage:
             self.error = str(err)
             return
         self._last_ts = now
+        data = self.coordinator.data
         for f in flows:
             net = (f.get("source") or {}).get("network_id")
+            if data and net:   # Flows können alte oder neue Netz-IDs liefern (Network 11)
+                net = data.real_id("networks", net) or net
             if net not in self.network_ids:
                 continue
             app = flow_app(f) or "Sonstiges"
