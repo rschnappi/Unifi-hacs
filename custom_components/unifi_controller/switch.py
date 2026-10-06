@@ -23,6 +23,7 @@ from .resources import (
     name_key,
     object_name,
     switch_suffix,
+    stable_id,
 )
 
 
@@ -315,7 +316,7 @@ class AppBlockSwitch(ControllerEntity, SwitchEntity):
 
     def __init__(self, coordinator: UniFiCoordinator, net_id: str, app: str) -> None:
         net = coordinator.data.config["networks"][net_id]
-        super().__init__(coordinator, f"app_block_{net_id}_{app.lower()}",
+        super().__init__(coordinator, f"app_block_{stable_id(net, net_id)}_{app.lower()}",
                          f"App-Sperre {object_name(net)} {app}")
         self._net, self._app = net_id, app
         self._attr_entity_registry_enabled_default = app in DEFAULT_BLOCK_APPS
