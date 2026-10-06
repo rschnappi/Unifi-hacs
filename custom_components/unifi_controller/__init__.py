@@ -45,6 +45,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: UniFiConfigEntry) -> boo
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     _async_migrate_unique_ids(hass, entry, coordinator)
+    _async_cleanup_uuid_duplicates(hass, entry, coordinator)
     coordinator.kids = KidManager(hass, coordinator)
     await coordinator.kids.async_setup()
     coordinator.presence = PresenceManager(hass, coordinator)
@@ -86,6 +87,45 @@ def _async_migrate_unique_ids(
         registry.async_update_entity(ent.entity_id, new_unique_id=new)
         taken.add(new)
         _LOGGER.debug("Unique-ID migriert: %s → %s", ent.entity_id, new)
+
+
+def _async_cleanup_uuid_duplicates(
+    hass: HomeAssistant, entry: UniFiConfigEntry, coordinator: UniFiCoordinator
+) -> None:
+    """Network 11 (PostgreSQL): Objekte haben neue UUIDs, die alte ID steht in ``legacy_id``.
+
+    Entitäten nutzen wieder die alte ID. Einträge, die zwischenzeitlich mit der UUID angelegt
+    wurden (Duplikate „…_2“), werden entfernt – oder, falls das Original fehlt, auf die alte ID
+    umgestellt.
+    """
+    pairs: dict[str, str] = {}
+    for objs in coordinator.data.config.values():
+        if not isinstance(objs, dict):
+            continue
+        for obj in objs.values():
+            if isinstance(obj, dict) and obj.get("legacy_id") and obj.get("_id"):
+                pairs[str(obj["_id"])] = str(obj["legacy_id"])
+    if not pairs:
+        return
+    registry = er.async_get(hass)
+    entries = er.async_entries_for_config_entry(registry, entry.entry_id)
+    taken = {e.unique_id for e in entries}
+    removed = moved = 0
+    for ent in entries:
+        uuid = next((u for u in pairs if u in ent.unique_id), None)
+        if not uuid:
+            continue
+        target = ent.unique_id.replace(uuid, pairs[uuid])
+        if target in taken:
+            registry.async_remove(ent.entity_id)
+            removed += 1
+        else:
+            registry.async_update_entity(ent.entity_id, new_unique_id=target)
+            taken.add(target)
+            moved += 1
+    if removed or moved:
+        _LOGGER.info("Network 11 ID-Umstellung: %s doppelte Entitäten entfernt, %s übernommen",
+                     removed, moved)
 
 
 async def _async_reload(hass: HomeAssistant, entry: UniFiConfigEntry) -> None:

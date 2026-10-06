@@ -73,8 +73,8 @@ class ClientNetworkSelect(ControllerEntity, SelectEntity):
     def current_option(self) -> str | None:
         user = self._user or {}
         if user.get("virtual_network_override_enabled"):
-            name = selectable_networks(self.coordinator).get(
-                user.get("virtual_network_override_id"))
+            key = self.coordinator.data.real_id("networks", user.get("virtual_network_override_id"))
+            name = selectable_networks(self.coordinator).get(key)
             if name:
                 return name
         return AUTO
@@ -87,7 +87,7 @@ class ClientNetworkSelect(ControllerEntity, SelectEntity):
         if self.coordinator.kids:
             net = client.get("network_id") if client else user.get("last_connection_network_id")
             kid = next((k.name for k in self.coordinator.kids.kids.values()
-                        if k.network_id == net), None)
+                        if net in k.net_ids), None)
         seen = user.get("last_seen")
         return {
             "mac": self._mac,

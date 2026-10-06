@@ -152,8 +152,19 @@ def name_key(obj: dict) -> str:
     return slugify(object_name(obj)) or str(obj.get("_id", ""))
 
 
+def stable_id(obj: dict | None, fallback: str = "") -> str:
+    """Stabile Objekt-ID für Unique-IDs.
+
+    Ab Network 11 (PostgreSQL) haben alle Objekte eine neue UUID als ``_id``; die frühere
+    Mongo-ID steht in ``legacy_id``. Für Entitäten wird die alte ID weiterverwendet, damit sie
+    nach dem Update dieselben bleiben. API-Aufrufe nutzen immer ``_id``.
+    """
+    obj = obj or {}
+    return str(obj.get("legacy_id") or obj.get("_id") or fallback)
+
+
 def switch_suffix(group: SwitchGroup, obj_id: str, obj: dict) -> str:
     """Unique-ID-Suffix eines Schalters."""
     if group.by_name:
         return f"{group.uid_prefix}_name_{name_key(obj)}"
-    return f"{group.uid_prefix}_{obj_id}"
+    return f"{group.uid_prefix}_{stable_id(obj, obj_id)}"
