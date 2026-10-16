@@ -21,7 +21,7 @@ from .logs import parse_entry
 from .region import async_apply, country_names
 from .integration import RESOURCES as INT_RESOURCES
 from .integration import body_of, device_uuid, quote_filter, voucher_view
-from .resources import DATASETS, OFFICIAL, object_name, redact
+from .resources import DATASETS, DNS_VALUE_FIELD, OFFICIAL, is_dns, object_name, redact
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan
 
 _LOGGER = logging.getLogger(__name__)
@@ -35,6 +35,8 @@ BASE = {vol.Optional(ATTR_ENTRY): cv.string}
 MAC_SCHEMA = vol.Schema({**BASE, vol.Required(ATTR_MAC): cv.string})
 RESOURCE = vol.In([*DATASETS, *OFFICIAL])
 ANY_RESOURCE = vol.In([*DATASETS, *OFFICIAL, *INT_RESOURCES])
+DNS_TYPES = {"A": "A_RECORD", "AAAA": "AAAA_RECORD", "CNAME": "CNAME_RECORD", "MX": "MX_RECORD",
+             "TXT": "TXT_RECORD", "SRV": "SRV_RECORD", "FORWARD": "FORWARD_DOMAIN"}
 
 
 def _valid_ip(value: str) -> str:
@@ -453,6 +455,39 @@ def async_setup_services(hass: HomeAssistant) -> None:
             "PUT", f"sites/{{site}}/acl-rules/{rules[0]['id']}",
             body_of(rules[0], {"enabled": call.data["enabled"]}))))
 
+    # ------------------------------------------------------------ DNS (offizielle API)
+    async def set_dns_record(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        rtype = DNS_TYPES[call.data["type"]]
+        domain = call.data["domain"].strip().lower()
+        body: dict[str, Any] = {"type": rtype, "enabled": call.data["enabled"], "domain": domain,
+                                DNS_VALUE_FIELD[rtype]: call.data["value"].strip()}
+        if rtype != "FORWARD_DOMAIN":
+            body["ttlSeconds"] = call.data["ttl"]
+        for key in ("priority", "weight", "port", "service", "protocol"):
+            if key in call.data:
+                body[key] = call.data[key]
+        cur = [o for o in c.data.config.get("dns_records", {}).values()
+               if is_dns(o) and o["domain"].lower() == domain and o["type"] == rtype]
+        if cur:
+            res = await _run(c.async_update_object("dns_records", cur[0], body))
+        else:
+            res = await _run(c.async_create_object("dns_records", body))
+        return {"action": "geändert" if cur else "angelegt", "record": redact(res)}
+
+    async def delete_dns_record(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        domain = call.data["domain"].strip().lower()
+        rtype = DNS_TYPES.get(call.data.get("type", ""), None)
+        hits = [o for o in c.data.config.get("dns_records", {}).values()
+                if is_dns(o) and o["domain"].lower() == domain and (not rtype or o["type"] == rtype)]
+        if not hits:
+            raise ServiceValidationError(f"Kein DNS-Eintrag für {domain}")
+        if len(hits) > 1 and not rtype:
+            raise ServiceValidationError(f"{domain} hat mehrere Einträge – type angeben")
+        await _run(c.async_delete_object("dns_records", hits[0]))
+        return {"deleted": object_name(hits[0])}
+
     reg = hass.services.async_register
     reg(DOMAIN, "api_request", api_request, schema=vol.Schema({
         **BASE,
@@ -505,6 +540,24 @@ def async_setup_services(hass: HomeAssistant) -> None:
     reg(DOMAIN, "set_acl_rule", set_acl_rule, schema=vol.Schema({
         **BASE, vol.Required("rule"): cv.string, vol.Required("enabled"): cv.boolean,
     }))
+    reg(DOMAIN, "set_dns_record", set_dns_record, schema=vol.Schema({
+        **BASE,
+        vol.Required("domain"): vol.All(cv.string, vol.Length(min=1, max=127)),
+        vol.Required("value"): cv.string,
+        vol.Optional("type", default="A"): vol.In(list(DNS_TYPES)),
+        vol.Optional("ttl", default=0): vol.All(vol.Coerce(int), vol.Range(min=0, max=86400)),
+        vol.Optional("enabled", default=True): cv.boolean,
+        vol.Optional("priority"): vol.All(vol.Coerce(int), vol.Range(min=0, max=65535)),
+        vol.Optional("weight"): vol.All(vol.Coerce(int), vol.Range(min=0, max=65535)),
+        vol.Optional("port"): vol.All(vol.Coerce(int), vol.Range(min=1, max=65535)),
+        vol.Optional("service"): cv.string,
+        vol.Optional("protocol"): cv.string,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "delete_dns_record", delete_dns_record, schema=vol.Schema({
+        **BASE,
+        vol.Required("domain"): cv.string,
+        vol.Optional("type"): vol.In(list(DNS_TYPES)),
+    }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "update_object", update_object, schema=vol.Schema({
         **BASE,
         vol.Required(ATTR_RESOURCE): RESOURCE,

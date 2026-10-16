@@ -14,7 +14,6 @@ DATASETS: dict[str, str] = {
     "trafficroutes": "v2/trafficroutes",
     "portforwards": "rest/portforward",
     "routes": "rest/routing",
-    "dns_records": "v2/static-dns",
     "port_profiles": "rest/portconf",
     "usergroups": "rest/usergroup",
     "qos_rules": "v2/qos-rules",
@@ -29,7 +28,23 @@ OFFICIAL: dict[str, str] = {
     "firewall_policies": "sites/{site}/firewall/policies",
     "firewall_zones": "sites/{site}/firewall/zones",
     "firewall_groups": "sites/{site}/traffic-matching-lists",
+    "dns_records": "sites/{site}/dns/policies",   # früher v2/static-dns
 }
+
+# DNS Policies: Typ → Feld mit dem Wert
+DNS_VALUE_FIELD = {
+    "A_RECORD": "ipv4Address", "AAAA_RECORD": "ipv6Address", "CNAME_RECORD": "targetDomain",
+    "MX_RECORD": "mailServerDomain", "TXT_RECORD": "text", "SRV_RECORD": "serverDomain",
+    "FORWARD_DOMAIN": "ipAddress",
+}
+
+
+def is_dns(obj: dict) -> bool:
+    return "domain" in obj and obj.get("type") in DNS_VALUE_FIELD
+
+
+def dns_short(obj: dict) -> str:
+    return str(obj.get("type", "")).replace("_RECORD", "").replace("FORWARD_DOMAIN", "Forward")
 # Hilfsfelder, die nie zurückgeschrieben werden
 LOCAL_FIELDS = {"_id", "internal_zone_id", "internal_network_ids"}
 OFFICIAL_READ_ONLY = {"id", "metadata", "index"} | LOCAL_FIELDS
@@ -79,6 +94,9 @@ def redact(obj: Any) -> Any:
 
 
 def object_name(obj: dict) -> str:
+    if is_dns(obj):
+        return obj["domain"] if obj.get("type") == "A_RECORD" else \
+            f"{obj['domain']} ({dns_short(obj)})"
     return str(
         obj.get("name") or obj.get("description") or obj.get("key")
         or obj.get("hostname") or obj.get("_id", "?")
@@ -143,6 +161,16 @@ def _fw_attrs(obj: dict, config: dict[str, dict[str, dict]]) -> dict[str, Any]:
     }
 
 
+def _dns_attrs(obj: dict) -> dict[str, Any]:
+    t = obj.get("type")
+    out = {"id": obj.get("id"), "typ": dns_short(obj), "domain": obj.get("domain"),
+           "wert": obj.get(DNS_VALUE_FIELD.get(t, ""), None), "ttl_s": obj.get("ttlSeconds")}
+    for k in ("priority", "weight", "port", "service", "protocol"):
+        if obj.get(k) is not None:
+            out[k] = obj[k]
+    return out
+
+
 @dataclass(frozen=True, kw_only=True)
 class SwitchGroup:
     """Eine Schaltergruppe über einem Dataset."""
@@ -194,7 +222,8 @@ SWITCH_GROUPS: tuple[SwitchGroup, ...] = (
     SwitchGroup(key="qos_rules", dataset="qos_rules", label="QoS", icon="mdi:speedometer",
                 by_name=True),
     SwitchGroup(key="routes", dataset="routes", label="Route", icon="mdi:routes"),
-    SwitchGroup(key="dns_records", dataset="dns_records", label="DNS", icon="mdi:dns"),
+    SwitchGroup(key="dns_records", dataset="dns_records", label="DNS", icon="mdi:dns",
+                by_name=True, filter=lambda o: not is_system(o), attrs=lambda o, c: _dns_attrs(o)),
 )
 SWITCH_GROUP_KEYS = [g.key for g in SWITCH_GROUPS]
 
@@ -203,6 +232,8 @@ def name_key(obj: dict) -> str:
     """Stabiler Schlüssel aus dem Objektnamen (für Unique-IDs)."""
     from homeassistant.util import slugify  # noqa: PLC0415
 
+    if is_dns(obj):      # gleiche Domain mit A + AAAA … darf nicht kollidieren
+        return slugify(f"{obj['type']}_{obj['domain']}")
     return slugify(object_name(obj)) or str(obj.get("_id", ""))
 
 

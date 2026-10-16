@@ -623,3 +623,84 @@ set_acl_rule:
       required: true
       selector:
         boolean: {}
+set_dns_record:
+  fields:
+    config_entry_id: *id001
+    domain:
+      required: true
+      example: nas.lan
+      selector:
+        text: {}
+    value:
+      required: true
+      example: 192.168.99.10
+      selector:
+        text: {}
+    type:
+      default: A
+      selector:
+        select:
+          options:
+          - A
+          - AAAA
+          - CNAME
+          - MX
+          - TXT
+          - SRV
+          - FORWARD
+    ttl:
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 86400
+          unit_of_measurement: s
+          mode: box
+    enabled:
+      default: true
+      selector:
+        boolean: {}
+    priority:
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    weight:
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    port:
+      selector:
+        number:
+          min: 1
+          max: 65535
+          mode: box
+    service:
+      example: _sip
+      selector:
+        text: {}
+    protocol:
+      example: _tcp
+      selector:
+        text: {}
+delete_dns_record:
+  fields:
+    config_entry_id: *id001
+    domain:
+      required: true
+      selector:
+        text: {}
+    type:
+      selector:
+        select:
+          options:
+          - A
+          - AAAA
+          - CNAME
+          - MX
+          - TXT
+          - SRV
+          - FORWARD
