@@ -117,6 +117,49 @@ def device_uuid(coordinator: UniFiCoordinator, mac: str) -> str:
     raise UniFiApiError(f"Gerät {mac} in der Integration-API nicht gefunden")
 
 
+async def async_device_action(coordinator: UniFiCoordinator, mac: str, action: str,
+                              port_idx: int | None = None) -> Any:
+    """Geräte-/Port-Aktion (RESTART, POWER_CYCLE) offiziell; ohne offizielle API intern."""
+    try:
+        uuid = device_uuid(coordinator, mac)
+    except UniFiApiError:
+        uuid = None
+    if uuid:
+        path = (f"sites/{{site}}/devices/{uuid}/interfaces/ports/{port_idx}/actions"
+                if port_idx is not None else f"sites/{{site}}/devices/{uuid}/actions")
+        return await coordinator.client.integration("POST", path, {"action": action})
+    legacy = {"RESTART": "restart", "POWER_CYCLE": "power-cycle"}[action]
+    extra = {"port_idx": port_idx} if port_idx is not None else {}
+    return await coordinator.client.devmgr(legacy, mac, **extra)
+
+
+async def async_client_uuid(coordinator: UniFiCoordinator, mac: str) -> str | None:
+    try:
+        hits = await coordinator.client.integration_list(
+            "sites/{site}/clients", api_filter=f"macAddress.eq({quote_filter(mac.lower())})")
+    except UniFiApiError as err:
+        _LOGGER.debug("Client %s offiziell nicht abfragbar: %s", mac, err)
+        return None
+    return hits[0]["id"] if hits else None
+
+
+async def async_guest_access(coordinator: UniFiCoordinator, mac: str, authorize: bool,
+                             minutes: int | None = None, **limits: Any) -> Any:
+    """Gast freigeben/sperren über ``clients/{id}/actions``; ohne offizielle API intern."""
+    if uuid := await async_client_uuid(coordinator, mac):
+        body: dict[str, Any] = {
+            "action": "AUTHORIZE_GUEST_ACCESS" if authorize else "UNAUTHORIZE_GUEST_ACCESS"}
+        if authorize:
+            if minutes:
+                body["timeLimitMinutes"] = minutes
+            body |= {k: v for k, v in limits.items() if v is not None}
+        return await coordinator.client.integration(
+            "POST", f"sites/{{site}}/clients/{uuid}/actions", body)
+    extra = {"minutes": minutes} if authorize and minutes else {}
+    return await coordinator.client.stamgr(
+        "authorize-guest" if authorize else "unauthorize-guest", mac, **extra)
+
+
 def format_code(code: Any) -> str:
     s = str(code or "")
     return f"{s[:5]}-{s[5:]}" if len(s) == 10 and s.isdigit() else s

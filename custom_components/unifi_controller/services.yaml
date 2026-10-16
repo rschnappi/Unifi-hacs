@@ -260,6 +260,27 @@ authorize_guest:
           min: 1
           max: 525600
           unit_of_measurement: min
+    data_limit_mb:
+      selector:
+        number:
+          min: 1
+          max: 1048576
+          unit_of_measurement: MB
+          mode: box
+    download_kbps:
+      selector:
+        number:
+          min: 2
+          max: 10000000
+          unit_of_measurement: kbit/s
+          mode: box
+    upload_kbps:
+      selector:
+        number:
+          min: 2
+          max: 10000000
+          unit_of_measurement: kbit/s
+          mode: box
 power_cycle_port:
   fields:
     config_entry_id: *id001
