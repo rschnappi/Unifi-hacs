@@ -21,7 +21,7 @@ from .logs import parse_entry
 from .region import async_apply, country_names
 from .integration import RESOURCES as INT_RESOURCES
 from .integration import body_of, device_uuid, quote_filter, voucher_view
-from .resources import DATASETS, object_name, redact
+from .resources import DATASETS, OFFICIAL, object_name, redact
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,8 +33,8 @@ ATTR_OBJECT = "object"
 
 BASE = {vol.Optional(ATTR_ENTRY): cv.string}
 MAC_SCHEMA = vol.Schema({**BASE, vol.Required(ATTR_MAC): cv.string})
-RESOURCE = vol.In(list(DATASETS))
-ANY_RESOURCE = vol.In([*DATASETS, *INT_RESOURCES])
+RESOURCE = vol.In([*DATASETS, *OFFICIAL])
+ANY_RESOURCE = vol.In([*DATASETS, *OFFICIAL, *INT_RESOURCES])
 
 
 def _valid_ip(value: str) -> str:
@@ -87,7 +87,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def get_objects(call: ServiceCall) -> ServiceResponse:
         c = _coordinator(hass, call)
         dataset = call.data[ATTR_RESOURCE]
-        if dataset in INT_RESOURCES and dataset not in DATASETS:
+        if dataset in OFFICIAL and (call.data.get("refresh") or dataset not in c.data.config):
+            objs = await _run(c.client.integration_list(
+                OFFICIAL[dataset], call.data.get("api_filter")))
+        elif dataset in OFFICIAL:
+            objs = list(c.data.config[dataset].values())
+        elif dataset in INT_RESOURCES and dataset not in DATASETS:
             if call.data.get("refresh") or call.data.get("api_filter") or \
                     dataset not in c.data.config:
                 objs = await _run(c.client.integration_list(
@@ -114,15 +119,14 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
     async def create_object(call: ServiceCall) -> ServiceResponse:
         c = _coordinator(hass, call)
-        path = DATASETS[call.data[ATTR_RESOURCE]]
-        result = await _run(c.async_command(c.client.create_object(path, call.data["data"])))
+        result = await _run(c.async_create_object(call.data[ATTR_RESOURCE], call.data["data"]))
         return {"data": redact(result)}
 
     async def delete_object(call: ServiceCall) -> None:
         c = _coordinator(hass, call)
         dataset = call.data[ATTR_RESOURCE]
         obj = _find(c, dataset, call.data[ATTR_OBJECT])
-        await _run(c.async_command(c.client.delete_object(DATASETS[dataset], obj["_id"])))
+        await _run(c.async_delete_object(dataset, obj))
 
     async def set_enabled(call: ServiceCall) -> None:
         c = _coordinator(hass, call)

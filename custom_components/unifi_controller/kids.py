@@ -28,7 +28,8 @@ from homeassistant.util import dt as dt_util
 
 from .api import UniFiApiError
 from .const import DOMAIN
-from .region import zone_id
+from .region import legacy_zone_id, zone_id, zone_of_network
+from .resources import is_system
 
 if TYPE_CHECKING:
     from .coordinator import UniFiCoordinator
@@ -96,10 +97,10 @@ def next_free_network(data) -> tuple[int, str]:
         except (KeyError, ValueError):
             continue
         used.append(net)
-        if zone and n.get("firewall_zone_id") == zone and str(net).startswith("192.168."):
+        if zone and zone_of_network(data, n) == zone and str(net).startswith("192.168."):
             kid_octets.append(int(str(net).split(".")[2]))
     kid_vlans = [n.get("vlan") for n in nets
-                 if zone and n.get("firewall_zone_id") == zone and n.get("vlan")]
+                 if zone and zone_of_network(data, n) == zone and n.get("vlan")]
 
     def free(o: int) -> bool:
         cand = ipaddress.ip_network(f"192.168.{o}.0/24")
@@ -124,7 +125,8 @@ async def async_create_network(coordinator: UniFiCoordinator, name: str) -> str:
         "name": name, "purpose": "corporate", "networkgroup": "LAN",
         "vlan_enabled": True, "vlan": vlan, "ip_subnet": f"{base}.1/24",
         "dhcpd_enabled": True, "dhcpd_start": f"{base}.20", "dhcpd_stop": f"{base}.250",
-        "firewall_zone_id": zone, "internet_access_enabled": True, "mdns_enabled": True,
+        "firewall_zone_id": legacy_zone_id(data, zone) or zone,
+        "internet_access_enabled": True, "mdns_enabled": True,
         "network_isolation_enabled": True, "setting_preference": "manual",
         "ipv6_setting_preference": "manual", "enabled": True,
     }
@@ -172,7 +174,7 @@ class Kid:
     def policy(self, which: int) -> dict | None:
         want = policy_names(self.name)[which]
         for p in self.coordinator.data.config.get(FW, {}).values():
-            if p.get("name") == want and not p.get("predefined"):
+            if p.get("name") == want and not is_system(p):
                 return p
         return None
 
@@ -280,29 +282,25 @@ class Kid:
         if not net:
             _LOGGER.warning("Kind %s: Netz %s fehlt", self.name, self.network_id)
             return
-        src_zone = net.get("firewall_zone_id") or kid_zone(data)
+        src_zone = zone_of_network(data, net) or kid_zone(data)
         subnet = subnet_of(net)
         targets = [(0, zone_id(data, "external")), (1, zone_id(data, "iot"))]
         for which, dst in targets:
             if self.policy(which) is not None or not dst or not subnet or not src_zone:
                 continue
             body = {
-                "action": "BLOCK", "connection_state_type": "ALL", "connection_states": [],
-                "create_allow_respond": False, "enabled": False, "icmp_typename": "ANY",
-                "icmp_v6_typename": "ANY", "ip_version": "IPV4", "logging": False,
-                "match_ip_sec": False, "match_opposite_protocol": False,
-                "name": policy_names(self.name)[which], "protocol": "all",
+                "enabled": False, "name": policy_names(self.name)[which],
                 "description": f"Kinderprofil {self.name} (UniFi Controller Manager)",
-                "schedule": {"mode": "ALWAYS"},
-                "source": {"ips": [subnet], "match_mac": False, "match_opposite_ips": False,
-                           "match_opposite_ports": False, "matching_target": "IP",
-                           "matching_target_type": "SPECIFIC", "port_matching_type": "ANY",
-                           "zone_id": src_zone},
-                "destination": {"match_opposite_ports": False, "matching_target": "ANY",
-                                "port_matching_type": "ANY", "zone_id": dst},
+                "action": {"type": "BLOCK"},
+                "source": {"zoneId": src_zone, "trafficFilter": {
+                    "type": "IP_ADDRESS", "ipAddressFilter": {
+                        "type": "IP_ADDRESSES", "matchOpposite": False,
+                        "items": [{"type": "SUBNET", "value": subnet}]}}},
+                "destination": {"zoneId": dst},
+                "ipProtocolScope": {"ipVersion": "IPV4"},
+                "loggingEnabled": False,
             }
-            await self.coordinator.async_command(
-                self.coordinator.client.create_object("v2/firewall-policies", body))
+            await self.coordinator.async_create_object(FW, body)
             _LOGGER.info("Kind %s: Policy „%s“ angelegt", self.name, body["name"])
 
     async def async_set_online(self, online: bool, reason: str = "") -> None:
@@ -512,10 +510,9 @@ class KidManager:
             return
         for pname in policy_names(name):
             for p in list(self.coordinator.data.config.get(FW, {}).values()):
-                if p.get("name") == pname and not p.get("predefined"):
+                if p.get("name") == pname and not is_system(p):
                     try:
-                        await self.coordinator.async_command(
-                            self.coordinator.client.delete_object("v2/firewall-policies", p["_id"]))
+                        await self.coordinator.async_delete_object(FW, p)
                         _LOGGER.info("Kind %s entfernt: Policy „%s“ gelöscht", name, pname)
                     except UniFiApiError as err:
                         _LOGGER.warning("Policy „%s“ nicht löschbar: %s", pname, err)
