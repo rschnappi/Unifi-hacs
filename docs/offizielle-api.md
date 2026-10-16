@@ -42,7 +42,7 @@ Seiten geladen.
 | 1 | Firewall-Policies, Zonen, Adresslisten (Traffic Matching Lists): Schalter, Länder-Blocking, Fail2Ban-Liste, Sperren der Kinderprofile, Länderliste | **umgestellt** |
 | 2a | DNS-Einträge → DNS Policies (A, AAAA, CNAME, MX, TXT, SRV, Forward): Schalter je Eintrag, Dienste `set_dns_record` / `delete_dns_record` | **umgestellt** |
 | 2b | Netze und WLANs schreiben: Netz-, Internet- und VPN-freie LAN-Schalter, WLAN-Schalter, `set_wlan` (aktiv, versteckt, Client-Isolation) über `networks` bzw. `wifi/broadcasts`; Zuordnung über die `external_id` | **umgestellt** |
-| 3 | Geräte- und Client-Aktionen (Neustart, PoE-Port, Gast-Freigabe) | geplant |
+| 3 | Geräte- und Client-Aktionen: Neustart (Button/`restart_device`), PoE-Port (Button/`power_cycle_port`), Gast freigeben/sperren (`authorize_guest` neu mit Datenlimit und Bandbreite, `unauthorize_guest`) über `devices/{id}/actions`, `…/ports/{idx}/actions`, `clients/{id}/actions` | **umgestellt** |
 
 Gelesen werden Netze und WLANs weiter intern: Subnetze, DHCP-Details, WAN- und VPN-Netze,
 WLAN-Passwörter und die Netz-IDs, auf die sich die Clients beziehen, liefert nur die interne API.

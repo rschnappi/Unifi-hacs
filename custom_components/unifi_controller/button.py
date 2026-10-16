@@ -9,6 +9,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .api import UniFiApiError
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
+from .integration import async_device_action
 from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .resources import object_name
@@ -50,7 +51,7 @@ class RestartButton(DeviceEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.coordinator.async_command(
-            self.coordinator.client.devmgr("restart", self._mac))
+            async_device_action(self.coordinator, self._mac, "RESTART"))
 
 
 class PowerCycleButton(DeviceEntity, ButtonEntity):
@@ -64,7 +65,7 @@ class PowerCycleButton(DeviceEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.coordinator.async_command(
-            self.coordinator.client.devmgr("power-cycle", self._mac, port_idx=self._idx))
+            async_device_action(self.coordinator, self._mac, "POWER_CYCLE", self._idx))
 
 
 class RotateWireguardButton(ControllerEntity, ButtonEntity):

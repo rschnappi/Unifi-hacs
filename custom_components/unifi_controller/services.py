@@ -20,7 +20,14 @@ from .flows import APP_DOMAINS, async_query
 from .logs import parse_entry
 from .region import async_apply, country_names
 from .integration import RESOURCES as INT_RESOURCES
-from .integration import body_of, device_uuid, quote_filter, voucher_view
+from .integration import (
+    async_device_action,
+    async_guest_access,
+    body_of,
+    device_uuid,
+    quote_filter,
+    voucher_view,
+)
 from .resources import DATASETS, DNS_VALUE_FIELD, OFFICIAL, is_dns, object_name, redact
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan
 
@@ -328,20 +335,25 @@ def async_setup_services(hass: HomeAssistant) -> None:
                              {"cmd": "forget-sta", "macs": [call.data[ATTR_MAC].lower()]})))
 
     async def authorize_guest(call: ServiceCall) -> None:
-        extra = {"minutes": call.data["minutes"]} if "minutes" in call.data else {}
-        await stamgr("authorize-guest", call, **extra)
+        c = _coordinator(hass, call)
+        await _run(c.async_command(async_guest_access(
+            c, call.data[ATTR_MAC], True, call.data.get("minutes"),
+            dataUsageLimitMBytes=call.data.get("data_limit_mb"),
+            rxRateLimitKbps=call.data.get("download_kbps"),
+            txRateLimitKbps=call.data.get("upload_kbps"))))
 
     async def unauthorize_guest(call: ServiceCall) -> None:
-        await stamgr("unauthorize-guest", call)
+        c = _coordinator(hass, call)
+        await _run(c.async_command(async_guest_access(c, call.data[ATTR_MAC], False)))
 
     async def restart_device(call: ServiceCall) -> None:
         c = _coordinator(hass, call)
-        await _run(c.async_command(c.client.devmgr("restart", call.data[ATTR_MAC])))
+        await _run(c.async_command(async_device_action(c, call.data[ATTR_MAC], "RESTART")))
 
     async def power_cycle_port(call: ServiceCall) -> None:
         c = _coordinator(hass, call)
-        await _run(c.async_command(c.client.devmgr(
-            "power-cycle", call.data[ATTR_MAC], port_idx=call.data["port_idx"])))
+        await _run(c.async_command(async_device_action(
+            c, call.data[ATTR_MAC], "POWER_CYCLE", call.data["port_idx"])))
 
     async def set_wlan(call: ServiceCall) -> None:
         c = _coordinator(hass, call)
@@ -700,7 +712,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
     ):
         reg(DOMAIN, name, func, schema=MAC_SCHEMA)
     reg(DOMAIN, "authorize_guest", authorize_guest,
-        schema=MAC_SCHEMA.extend({vol.Optional("minutes"): vol.All(int, vol.Range(min=1))}))
+        schema=MAC_SCHEMA.extend({
+            vol.Optional("minutes"): vol.All(int, vol.Range(min=1, max=1000000)),
+            vol.Optional("data_limit_mb"): vol.All(int, vol.Range(min=1)),
+            vol.Optional("download_kbps"): vol.All(int, vol.Range(min=2)),
+            vol.Optional("upload_kbps"): vol.All(int, vol.Range(min=2)),
+        }))
     reg(DOMAIN, "power_cycle_port", power_cycle_port,
         schema=MAC_SCHEMA.extend({vol.Required("port_idx"): vol.All(int, vol.Range(min=1))}))
     reg(DOMAIN, "set_wlan", set_wlan, schema=vol.Schema({
