@@ -18,7 +18,7 @@ from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .kids import KidManager
 from .logs import LogManager
 from .presence import PresenceManager
-from .resources import SWITCH_GROUPS, switch_suffix
+from .resources import SWITCH_GROUPS, object_name, switch_suffix
 from .services import async_setup_services
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
@@ -47,6 +47,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: UniFiConfigEntry) -> boo
     entry.runtime_data = coordinator
     _async_migrate_legacy_ids(hass, entry, coordinator)
     _async_migrate_unique_ids(hass, entry, coordinator)
+    _async_migrate_dns_ids(hass, entry, coordinator)
     coordinator.kids = KidManager(hass, coordinator)
     await coordinator.kids.async_setup()
     coordinator.presence = PresenceManager(hass, coordinator)
@@ -134,6 +135,39 @@ def _async_migrate_legacy_ids(
         _LOGGER.warning(
             "UniFi Network 11: %s Entitäten auf neue Objekt-IDs umgestellt, %s Duplikate entfernt",
             moved, removed)
+
+
+def _async_migrate_dns_ids(
+    hass: HomeAssistant, entry: UniFiConfigEntry, coordinator: UniFiCoordinator
+) -> None:
+    """DNS-Schalter: v2/static-dns (ID-basiert) → DNS Policies der offiziellen API (namensbasiert).
+
+    Zuordnung über den Anzeigenamen „DNS <Domain>“; Entity-ID und Verlauf bleiben erhalten.
+    """
+    group = next((g for g in SWITCH_GROUPS if g.key == "dns_records"), None)
+    records = coordinator.data.config.get("dns_records", {})
+    if group is None or not records:
+        return
+    registry = er.async_get(hass)
+    old_prefix = f"{entry.entry_id}_{group.uid_prefix}_"
+    new_prefix = f"{old_prefix}name_"
+    by_name = {}
+    for rid, obj in records.items():
+        by_name.setdefault(f"{group.label} {object_name(obj)}", []).append((rid, obj))
+    taken = {e.unique_id for e in er.async_entries_for_config_entry(registry, entry.entry_id)}
+    for ent in er.async_entries_for_config_entry(registry, entry.entry_id):
+        if ent.domain != "switch" or not ent.unique_id.startswith(old_prefix) \
+                or ent.unique_id.startswith(new_prefix):
+            continue
+        hits = by_name.get(ent.original_name or "", [])
+        if len(hits) != 1:
+            continue
+        new = f"{entry.entry_id}_{switch_suffix(group, *hits[0])}"
+        if new in taken:
+            continue
+        registry.async_update_entity(ent.entity_id, new_unique_id=new)
+        taken.add(new)
+        _LOGGER.info("DNS-Schalter %s auf DNS Policy umgestellt", ent.entity_id)
 
 
 def _async_migrate_unique_ids(
