@@ -41,11 +41,17 @@ Seiten geladen.
 |---|---|---|
 | 1 | Firewall-Policies, Zonen, Adresslisten (Traffic Matching Lists): Schalter, Länder-Blocking, Fail2Ban-Liste, Sperren der Kinderprofile, Länderliste | **umgestellt** |
 | 2a | DNS-Einträge → DNS Policies (A, AAAA, CNAME, MX, TXT, SRV, Forward): Schalter je Eintrag, Dienste `set_dns_record` / `delete_dns_record` | **umgestellt** |
-| 2b | Netze, WLANs | geplant |
+| 2b | Netze und WLANs schreiben: Netz-, Internet- und VPN-freie LAN-Schalter, WLAN-Schalter, `set_wlan` (aktiv, versteckt, Client-Isolation) über `networks` bzw. `wifi/broadcasts`; Zuordnung über die `external_id` | **umgestellt** |
 | 3 | Geräte- und Client-Aktionen (Neustart, PoE-Port, Gast-Freigabe) | geplant |
 
-Netze bleiben bis Stufe 2 intern; ihre Zone wird über die `external_id` der internen Zone der
-offiziellen Zone zugeordnet (`zone_of_network`).
+Gelesen werden Netze und WLANs weiter intern: Subnetze, DHCP-Details, WAN- und VPN-Netze,
+WLAN-Passwörter und die Netz-IDs, auf die sich die Clients beziehen, liefert nur die interne API.
+Geschrieben wird offiziell, sobald alle geänderten Felder dort ein Gegenstück haben
+(`enabled`, `name`, `vlanId`, `internetAccessEnabled`, `isolationEnabled`,
+`mdnsForwardingEnabled`, `hideName`, `clientIsolationEnabled`): Detail-Objekt lesen, Änderung
+einsetzen, PUT. Ohne offizielle API (ältere Controller) fällt die Integration auf die interne
+zurück. Intern bleiben WLAN-Passwort, WireGuard-Schlüssel, VPN/WAN und das Anlegen der
+Kinderprofil-Netze (das offizielle Anlage-Schema für Gateway-Netze ist nicht dokumentiert).
 
 ## Was intern bleiben muss
 

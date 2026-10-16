@@ -346,14 +346,19 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def set_wlan(call: ServiceCall) -> None:
         c = _coordinator(hass, call)
         obj = _find(c, "wlans", call.data["wlan"])
-        changes: dict[str, Any] = {}
-        if "enabled" in call.data:
-            changes["enabled"] = call.data["enabled"]
-        if "passphrase" in call.data:
-            changes["x_passphrase"] = call.data["passphrase"]
-        if not changes:
-            raise ServiceValidationError("enabled oder passphrase angeben")
-        await _run(c.async_update_object("wlans", obj, changes))
+        changes = {field: call.data[key] for key, field in (
+            ("enabled", "enabled"), ("hidden", "hide_ssid"),
+            ("client_isolation", "l2_isolation")) if key in call.data}
+        if not changes and "passphrase" not in call.data:
+            raise ServiceValidationError(
+                "enabled, hidden, client_isolation oder passphrase angeben")
+        if changes:   # offizielle API (wifi/broadcasts)
+            await _run(c.async_update_object("wlans", obj, changes,
+                                             refresh="passphrase" not in call.data))
+        if "passphrase" in call.data:   # Passwort gibt es nur intern
+            obj = _find(c, "wlans", call.data["wlan"]) | changes
+            await _run(c.async_update_object(
+                "wlans", obj, {"x_passphrase": call.data["passphrase"]}))
 
     # ------------------------------------------------------------ offizielle API
     async def create_vouchers(call: ServiceCall) -> ServiceResponse:
@@ -702,5 +707,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         **BASE,
         vol.Required("wlan"): cv.string,
         vol.Optional("enabled"): cv.boolean,
+        vol.Optional("hidden"): cv.boolean,
+        vol.Optional("client_isolation"): cv.boolean,
         vol.Optional("passphrase"): vol.All(cv.string, vol.Length(min=8, max=63)),
     }))

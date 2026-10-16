@@ -282,6 +282,12 @@ set_wlan:
     enabled:
       selector:
         boolean: {}
+    hidden:
+      selector:
+        boolean: {}
+    client_isolation:
+      selector:
+        boolean: {}
     passphrase:
       selector:
         text:
