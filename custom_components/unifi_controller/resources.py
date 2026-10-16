@@ -63,6 +63,49 @@ def official_body(obj: dict, changes: dict | None = None) -> dict:
     """PUT-Body der offiziellen API: Objekt ohne nur lesbare Felder + Änderungen."""
     return {k: v for k, v in obj.items() if k not in OFFICIAL_READ_ONLY} | (changes or {})
 
+
+# Netze und WLANs: gelesen wird weiter intern (Subnetze, VPN/WAN, Passwörter und die
+# Netz-IDs der Clients gibt es nur dort), geschrieben über die offizielle API, sobald
+# alle geänderten Felder dort ein Gegenstück haben. Zuordnung über ``external_id``.
+HYBRID: dict[str, str] = {
+    "networks": "sites/{site}/networks",
+    "wlans": "sites/{site}/wifi/broadcasts",
+}
+HYBRID_FIELDS: dict[str, dict[str, str]] = {
+    "networks": {
+        "enabled": "enabled",
+        "name": "name",
+        "vlan": "vlanId",
+        "internet_access_enabled": "internetAccessEnabled",
+        "network_isolation_enabled": "isolationEnabled",
+        "mdns_enabled": "mdnsForwardingEnabled",
+    },
+    "wlans": {
+        "enabled": "enabled",
+        "name": "name",
+        "hide_ssid": "hideName",
+        "l2_isolation": "clientIsolationEnabled",
+    },
+}
+HYBRID_READ_ONLY = {"id", "metadata", "default"}
+
+
+def official_changes(dataset: str, obj: dict, changes: dict) -> dict | None:
+    """Änderungen ins offizielle Schema übersetzen – None, wenn es intern bleiben muss."""
+    fields = HYBRID_FIELDS.get(dataset)
+    if not fields or not obj.get("external_id") or not changes:
+        return None
+    if dataset == "networks" and obj.get("purpose") not in LAN_PURPOSES:
+        return None   # WAN/VPN haben in der offiziellen API keine Netz-Objekte
+    if any(k not in fields for k in changes):
+        return None
+    return {fields[k]: v for k, v in changes.items()}
+
+
+def hybrid_body(current: dict, changes: dict) -> dict:
+    """PUT-Body aus dem offiziellen Detail-Objekt plus Änderungen."""
+    return {k: v for k, v in current.items() if k not in HYBRID_READ_ONLY} | changes
+
 VPN_PURPOSES = {"remote-user-vpn", "vpn-client", "site-vpn"}
 LAN_PURPOSES = {"corporate", "guest"}
 
