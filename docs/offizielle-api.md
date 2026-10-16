@@ -40,7 +40,8 @@ Seiten geladen.
 | Stufe | Bereich | Stand |
 |---|---|---|
 | 1 | Firewall-Policies, Zonen, Adresslisten (Traffic Matching Lists): Schalter, Länder-Blocking, Fail2Ban-Liste, Sperren der Kinderprofile, Länderliste | **umgestellt** |
-| 2 | Netze, WLANs, DNS-Einträge (DNS Policies, auch als Schalter) | geplant |
+| 2a | DNS-Einträge → DNS Policies (A, AAAA, CNAME, MX, TXT, SRV, Forward): Schalter je Eintrag, Dienste `set_dns_record` / `delete_dns_record` | **umgestellt** |
+| 2b | Netze, WLANs | geplant |
 | 3 | Geräte- und Client-Aktionen (Neustart, PoE-Port, Gast-Freigabe) | geplant |
 
 Netze bleiben bis Stufe 2 intern; ihre Zone wird über die `external_id` der internen Zone der
