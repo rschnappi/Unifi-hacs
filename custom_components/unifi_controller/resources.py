@@ -9,9 +9,7 @@ from typing import Any
 DATASETS: dict[str, str] = {
     "networks": "rest/networkconf",
     "wlans": "rest/wlanconf",
-    "firewall_policies": "v2/firewall-policies",
-    "firewall_zones": "v2/firewall/zone",
-    "firewall_groups": "rest/firewallgroup",
+    "legacy_zones": "v2/firewall/zone",      # nur für die Zuordnung Netz → Zone (interne IDs)
     "trafficrules": "v2/trafficrules",
     "trafficroutes": "v2/trafficroutes",
     "portforwards": "rest/portforward",
@@ -25,12 +23,34 @@ DATASETS: dict[str, str] = {
 }
 OPTIONAL_DATASETS = {"users"}  # nur mit Client-Sperr-Schaltern
 
+# dataset -> Pfad der offiziellen API (relativ zu integration/v1, {site} = Site-UUID).
+# Objekte bekommen zusätzlich "_id" = "id", damit Schalter, Suche und Dienste einheitlich bleiben.
+OFFICIAL: dict[str, str] = {
+    "firewall_policies": "sites/{site}/firewall/policies",
+    "firewall_zones": "sites/{site}/firewall/zones",
+    "firewall_groups": "sites/{site}/traffic-matching-lists",
+}
+# Hilfsfelder, die nie zurückgeschrieben werden
+LOCAL_FIELDS = {"_id", "internal_zone_id", "internal_network_ids"}
+OFFICIAL_READ_ONLY = {"id", "metadata", "index"} | LOCAL_FIELDS
+
+
+def is_system(obj: dict) -> bool:
+    """Vom System angelegtes Objekt (offizielle API: metadata.origin, intern: predefined)."""
+    return bool(obj.get("predefined")) or \
+        (obj.get("metadata") or {}).get("origin") == "SYSTEM_DEFINED"
+
+
+def official_body(obj: dict, changes: dict | None = None) -> dict:
+    """PUT-Body der offiziellen API: Objekt ohne nur lesbare Felder + Änderungen."""
+    return {k: v for k, v in obj.items() if k not in OFFICIAL_READ_ONLY} | (changes or {})
+
 VPN_PURPOSES = {"remote-user-vpn", "vpn-client", "site-vpn"}
 LAN_PURPOSES = {"corporate", "guest"}
 
 # Felder, die nie in Attribute/Antworten gehören bzw. sich ständig ändern
 VOLATILE = {"hits", "last_hit"}
-SKIP_ATTRS = VOLATILE | {"site_id", "external_id", "_id", "attr_hidden_id"}
+SKIP_ATTRS = VOLATILE | {"site_id", "external_id", "_id", "attr_hidden_id", "internal_zone_id"}
 
 SECRET_WORDS = ("key", "psk", "token", "secret", "password", "passphrase",
                 "certificate", "private", "passwd")
@@ -70,22 +90,53 @@ def scalar_attrs(obj: dict) -> dict[str, Any]:
     } | {"id": obj.get("_id")}
 
 
+def _filter_text(tf: dict | None) -> str | None:
+    """Traffic-Filter der offiziellen API kurz beschreiben."""
+    if not tf:
+        return None
+    kind = tf.get("type")
+    if kind == "REGION":
+        return "Länder " + ", ".join((tf.get("regionFilter") or {}).get("regions") or [])
+    parts = []
+    ipf = tf.get("ipAddressFilter") or {}
+    if ipf.get("type") == "TRAFFIC_MATCHING_LIST":
+        parts.append("Liste")
+    elif ipf.get("items"):
+        parts.append(", ".join(str(i.get("value")) for i in ipf["items"]))
+    pf = tf.get("portFilter") or {}
+    if pf.get("items"):
+        parts.append("Port " + ", ".join(
+            str(i.get("value") or f"{i.get('start')}-{i.get('stop')}") for i in pf["items"]))
+    if (ipf or pf).get("matchOpposite"):
+        parts.insert(0, "nicht")
+    return " ".join(parts) or kind
+
+
 def _fw_attrs(obj: dict, config: dict[str, dict[str, dict]]) -> dict[str, Any]:
     zones = config.get("firewall_zones", {})
-    src, dst = obj.get("source") or {}, obj.get("destination") or {}
+    lists = config.get("firewall_groups", {})
 
     def side(s: dict) -> dict[str, Any]:
+        tf = s.get("trafficFilter") or {}
+        lid = (tf.get("ipAddressFilter") or {}).get("trafficMatchingListId")
         return {
-            "zone": zones.get(s.get("zone_id", ""), {}).get("name", s.get("zone_id")),
-            "target": s.get("matching_target"),
-            "ips": s.get("ips"),
-            "port": s.get("port"),
+            "zone": zones.get(s.get("zoneId", ""), {}).get("name", s.get("zoneId")),
+            "filter": _filter_text(tf),
+            "liste": lists.get(lid, {}).get("name") if lid else None,
         }
 
-    return scalar_attrs(obj) | {
-        "source": side(src),
-        "destination": side(dst),
-        "schedule": (obj.get("schedule") or {}).get("mode"),
+    return {
+        "id": obj.get("id"), "enabled": obj.get("enabled"), "name": obj.get("name"),
+        "description": obj.get("description"),
+        "action": (obj.get("action") or {}).get("type"),
+        "source": side(obj.get("source") or {}),
+        "destination": side(obj.get("destination") or {}),
+        "ip_version": (obj.get("ipProtocolScope") or {}).get("ipVersion"),
+        "connection_states": obj.get("connectionStateFilter"),
+        "logging": obj.get("loggingEnabled"),
+        "flows": obj.get("reportFlowEnabled"),
+        "schedule": (obj.get("schedule") or {}).get("mode", "ALWAYS"),
+        "index": obj.get("index"),
     }
 
 
@@ -127,7 +178,7 @@ SWITCH_GROUPS: tuple[SwitchGroup, ...] = (
     ),
     SwitchGroup(
         key="firewall_policies", dataset="firewall_policies", label="FW",
-        icon="mdi:shield-lock", filter=lambda o: not o.get("predefined"), attrs=_fw_attrs,
+        icon="mdi:shield-lock", filter=lambda o: not is_system(o), attrs=_fw_attrs,
         by_name=True,
     ),
     SwitchGroup(key="trafficrules", dataset="trafficrules", label="Traffic-Regel",

@@ -35,10 +35,20 @@ Filter-Syntax der offiziellen API: `name.like('IoT*')`, `expired.eq(false)`,
 `and(enabled.eq(true), name.like('Gast*'))`, `not(...)`. Listen werden automatisch über alle
 Seiten geladen.
 
-## Was bewusst bei der internen API bleibt
+## Umstellung auf die offizielle API
 
-Netze, WLANs, Firewall-Policies und -Zonen, DNS-Einträge, Traffic-Regeln, Portweiterleitungen,
-Clients und Geräte laufen weiter über die interne API. Die offizielle API kann das inzwischen
-großteils auch, verlangt beim Ändern aber jeweils das vollständige Objekt in einem anderen Schema.
-Ein Umbau brächte kein neues Verhalten, nur Risiko. Die interne API funktioniert unter
-Network 11 unverändert.
+| Stufe | Bereich | Stand |
+|---|---|---|
+| 1 | Firewall-Policies, Zonen, Adresslisten (Traffic Matching Lists): Schalter, Länder-Blocking, Fail2Ban-Liste, Sperren der Kinderprofile, Länderliste | **umgestellt** |
+| 2 | Netze, WLANs, DNS-Einträge (DNS Policies, auch als Schalter) | geplant |
+| 3 | Geräte- und Client-Aktionen (Neustart, PoE-Port, Gast-Freigabe) | geplant |
+
+Netze bleiben bis Stufe 2 intern; ihre Zone wird über die `external_id` der internen Zone der
+offiziellen Zone zugeordnet (`zone_of_network`).
+
+## Was intern bleiben muss
+
+Für folgende Bereiche hat die offizielle API (11.0.89) keine Endpunkte: Traffic-Regeln und
+-Routen (App-Sperren), Portweiterleitungen, statische Routen, QoS, Port-Profile, bekannte
+Clients (Netz-Zuordnung, Sperren), WireGuard-Zugänge, System-Log, Flows, Speedtest, Backups,
+LED/Locate und die Live-Statistik (Signal, AP, Temperaturen, Portfehler, Durchsatz).

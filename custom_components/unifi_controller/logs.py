@@ -52,6 +52,8 @@ if TYPE_CHECKING:
 
 _LOGGER = logging.getLogger(__name__)
 
+LISTS_PATH = "sites/{site}/traffic-matching-lists"   # offizielle API (früher rest/firewallgroup)
+
 LOG_PATH = "v2/system-log/all"
 PAGE_SIZE = 200
 MAX_PAGES = 5
@@ -408,8 +410,8 @@ class LogManager:
     # Schreibzugriffe hier bewusst OHNE coordinator.async_command (kein Refresh aus
     # dem Poll heraus → keine Rekursion); Cache wird lokal nachgezogen.
     async def _load_groups(self) -> dict[str, dict]:
-        groups = await self.coordinator.client.list_objects("rest/firewallgroup")
-        indexed = {g["_id"]: g for g in groups if "_id" in g}
+        lists = await self.coordinator.client.integration_list(LISTS_PATH)
+        indexed = {g["id"]: {**g, "_id": g["id"]} for g in lists if g.get("id")}
         if self.coordinator.data:
             self.coordinator.data.config["firewall_groups"] = indexed
         return indexed
@@ -421,30 +423,36 @@ class LogManager:
                 return g
         if not create_with:
             return None
-        await self.coordinator.client.create_object(
-            "rest/firewallgroup",
-            {"name": self.group_name, "group_type": "address-group",
-             "group_members": [create_with]},
-        )
+        await self.coordinator.client.integration("POST", LISTS_PATH, {
+            "type": "IPV4_ADDRESSES", "name": self.group_name,
+            "items": [{"type": "IP_ADDRESS", "value": create_with}]})
         _LOGGER.warning(
-            "Fail2Ban: Adressgruppe '%s' angelegt – eine Firewall-Policy mit dieser Gruppe als "
+            "Fail2Ban: Liste '%s' angelegt – eine Firewall-Policy mit dieser Liste als "
             "Quelle (Aktion BLOCK) muss sie noch verwenden", self.group_name)
         for g in (await self._load_groups()).values():
             if g.get("name") == self.group_name:
                 return g
         return None
 
+    @staticmethod
+    def _members(group: dict) -> list[str]:
+        return [str(i.get("value")) for i in group.get("items") or [] if i.get("value")]
+
     async def _set_members(self, group: dict, members: list[str]) -> None:
-        body = {**group, "group_members": members or [BAN_PLACEHOLDER]}
-        await self.coordinator.client.update_object("rest/firewallgroup", group["_id"], body)
-        group["group_members"] = body["group_members"]
+        items = [{"type": "IP_ADDRESS", "value": m} for m in (members or [BAN_PLACEHOLDER])]
+        await self.coordinator.client.integration(
+            "PUT", f"{LISTS_PATH}/{group['id']}",
+            {"type": group.get("type", "IPV4_ADDRESSES"), "name": group["name"], "items": items})
+        group["items"] = items
 
     async def async_ban(self, ip: str, minutes: int | None, reason: str = "manuell") -> None:
         ipaddress.ip_address(ip)  # validiert
         group = await self._group(create_with=ip)
         if group is None:
             raise UniFiApiError(f"Adressgruppe '{self.group_name}' konnte nicht angelegt werden")
-        current = [m for m in group.get("group_members", []) if m != BAN_PLACEHOLDER]
+        if ipaddress.ip_address(ip).version != 4:
+            raise UniFiApiError(f"Fail2Ban-Liste ist IPv4 – {ip} nicht sperrbar")
+        current = [m for m in self._members(group) if m != BAN_PLACEHOLDER]
         if ip not in current:
             await self._set_members(group, sorted({*current, ip}))
         count = self.history.get(ip, 0) + 1
@@ -472,8 +480,8 @@ class LogManager:
             self._save()
         try:
             group = await self._group()
-            if group is not None and ip in group.get("group_members", []):
-                await self._set_members(group, [m for m in group["group_members"] if m != ip])
+            if group is not None and ip in self._members(group):
+                await self._set_members(group, [m for m in self._members(group) if m != ip])
         except UniFiApiError:
             if had:  # Zustand wiederherstellen, beim nächsten Poll erneut versuchen
                 self.bans[ip] = {"since": time.time(), "until": time.time(), "reason": "retry"}
