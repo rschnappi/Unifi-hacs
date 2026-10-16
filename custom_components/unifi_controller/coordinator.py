@@ -27,11 +27,14 @@ from .const import (
 )
 from .resources import (
     DATASETS,
+    HYBRID,
     LOCAL_FIELDS,
     OFFICIAL,
     OPTIONAL_DATASETS,
     VOLATILE,
+    hybrid_body,
     official_body,
+    official_changes,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -292,11 +295,29 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         if dataset in OFFICIAL:
             coro = self.client.integration(
                 "PUT", f"{OFFICIAL[dataset]}/{obj['_id']}", official_body(obj, changes))
+        elif (mapped := official_changes(dataset, obj, changes)) is not None:
+            coro = self._async_hybrid_update(dataset, obj, changes, mapped)
         else:
             body = {k: v for k, v in obj.items()
                     if k not in VOLATILE and k not in LOCAL_FIELDS - {"_id"}} | changes
             coro = self.client.update_object(DATASETS[dataset], obj["_id"], body)
         return await (self.async_command(coro) if refresh else coro)
+
+    async def _async_hybrid_update(self, dataset: str, obj: dict, changes: dict,
+                                   mapped: dict) -> Any:
+        """Netz/WLAN über die offizielle API ändern; ohne sie (alte Controller) intern."""
+        path = f"{HYBRID[dataset]}/{obj['external_id']}"
+        try:
+            current = await self.client.integration("GET", path)
+        except UniFiAuthError:
+            raise
+        except UniFiApiError as err:
+            _LOGGER.debug("%s %s offiziell nicht lesbar (%s) – interne API", dataset,
+                          obj.get("name"), err)
+            body = {k: v for k, v in obj.items()
+                    if k not in VOLATILE and k not in LOCAL_FIELDS - {"_id"}} | changes
+            return await self.client.update_object(DATASETS[dataset], obj["_id"], body)
+        return await self.client.integration("PUT", path, hybrid_body(current, mapped))
 
     async def async_create_object(self, dataset: str, body: dict, refresh: bool = True) -> Any:
         coro = (self.client.integration("POST", OFFICIAL[dataset], body)
