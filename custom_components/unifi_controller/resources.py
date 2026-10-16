@@ -35,10 +35,13 @@ LOCAL_FIELDS = {"_id", "internal_zone_id", "internal_network_ids"}
 OFFICIAL_READ_ONLY = {"id", "metadata", "index"} | LOCAL_FIELDS
 
 
+SYSTEM_ORIGINS = {"SYSTEM_DEFINED", "DERIVED"}   # DERIVED = automatische Rückverkehr-Regel
+
+
 def is_system(obj: dict) -> bool:
-    """Vom System angelegtes Objekt (offizielle API: metadata.origin, intern: predefined)."""
+    """Nicht selbst angelegt: vom System oder automatisch abgeleitet (z. B. „… (Return)“)."""
     return bool(obj.get("predefined")) or \
-        (obj.get("metadata") or {}).get("origin") == "SYSTEM_DEFINED"
+        (obj.get("metadata") or {}).get("origin") in SYSTEM_ORIGINS
 
 
 def official_body(obj: dict, changes: dict | None = None) -> dict:
