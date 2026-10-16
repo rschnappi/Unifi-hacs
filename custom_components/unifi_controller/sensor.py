@@ -23,6 +23,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .coordinator import UniFiConfigEntry, UniFiCoordinator, UniFiData
+from .integration import sensors as integration_sensors
 from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .region import country_names, state as region_state, zone_id
@@ -220,6 +221,7 @@ async def async_setup_entry(
         for key, name, unit, icon in SPEEDTEST_SENSORS:
             yield SpeedtestSensor(coordinator, key, name, unit, icon)
         yield BackupSensor(coordinator)
+        yield from integration_sensors(coordinator)
         for nid in wg_servers(coordinator):
             yield VpnAccessSensor(coordinator, nid)
         for nid in coordinator.apps.network_ids:

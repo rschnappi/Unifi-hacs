@@ -13,6 +13,7 @@ api_request:
           - GET
           - POST
           - PUT
+          - PATCH
           - DELETE
     path:
       required: true
@@ -48,7 +49,33 @@ get_objects:
           - qos_rules
           - settings
           - users
+          - int_devices
+          - int_clients
+          - int_networks
+          - wifi_broadcasts
+          - int_firewall_zones
+          - int_firewall_policies
+          - acl_rules
+          - dns_policies
+          - traffic_matching_lists
+          - vouchers
+          - pending_devices
+          - wans
+          - vpn_servers
+          - site_to_site_tunnels
+          - radius_profiles
+          - device_tags
+          - switch_stacks
+          - mc_lag_domains
+          - lags
+          - dpi_categories
+          - dpi_applications
+          - countries
     filter:
+      selector:
+        text: {}
+    api_filter:
+      example: "expired.eq(false)"
       selector:
         text: {}
     refresh:
@@ -487,3 +514,112 @@ notify:
     data:
       selector:
         object: {}
+create_vouchers:
+  fields:
+    config_entry_id: *id001
+    name:
+      required: true
+      example: Gäste Wochenende
+      selector:
+        text: {}
+    count:
+      default: 1
+      selector:
+        number:
+          min: 1
+          max: 1000
+          mode: box
+    minutes:
+      default: 1440
+      selector:
+        number:
+          min: 1
+          max: 1000000
+          unit_of_measurement: min
+          mode: box
+    guest_limit:
+      selector:
+        number:
+          min: 1
+          max: 100
+          mode: box
+    data_mb:
+      selector:
+        number:
+          min: 1
+          max: 1048576
+          unit_of_measurement: MB
+          mode: box
+    down_kbps:
+      selector:
+        number:
+          min: 2
+          max: 100000
+          unit_of_measurement: kbit/s
+          mode: box
+    up_kbps:
+      selector:
+        number:
+          min: 2
+          max: 100000
+          unit_of_measurement: kbit/s
+          mode: box
+    notify:
+      default: true
+      selector:
+        boolean: {}
+get_vouchers:
+  fields:
+    config_entry_id: *id001
+    include_expired:
+      selector:
+        boolean: {}
+delete_vouchers:
+  fields:
+    config_entry_id: *id001
+    expired:
+      selector:
+        boolean: {}
+    name:
+      selector:
+        text: {}
+    code:
+      example: 12345-67890
+      selector:
+        text: {}
+adopt_device:
+  fields:
+    config_entry_id: *id001
+    mac: *id005
+    ignore_device_limit:
+      selector:
+        boolean: {}
+device_statistics:
+  fields:
+    config_entry_id: *id001
+    mac: *id005
+set_firewall_logging:
+  fields:
+    config_entry_id: *id001
+    policy:
+      required: true
+      example: Infra -> MCL-Netze blocken
+      selector:
+        text: {}
+    logging:
+      selector:
+        boolean: {}
+    report_flow:
+      selector:
+        boolean: {}
+set_acl_rule:
+  fields:
+    config_entry_id: *id001
+    rule:
+      required: true
+      selector:
+        text: {}
+    enabled:
+      required: true
+      selector:
+        boolean: {}

@@ -15,7 +15,7 @@ from homeassistant.util.yaml import load_yaml_dict
 _LOGGER = logging.getLogger(__name__)
 
 TIMEOUT = 25
-ALLOWED_METHODS = {"GET", "POST", "PUT", "DELETE"}
+ALLOWED_METHODS = {"GET", "POST", "PUT", "PATCH", "DELETE"}
 RETRY_DELAY = 0.5
 # lesende POST-Abfragen dürfen wie GET wiederholt werden
 READ_POSTS = ("v2/system-log/", "v2/traffic-flows", "stat/report/", "stat/sitedpi", "stat/stadpi")
@@ -58,6 +58,23 @@ async def async_get_api_key(hass: HomeAssistant, data: Any) -> str | None:
     return None
 
 
+SITE_PLACEHOLDERS = ("{site}", "{siteId}")
+PAGE_LIMIT = 200          # Maximum der meisten Integration-API-Listen
+MAX_ITEMS = 5000
+
+
+def _integration_error(text: str) -> str | None:
+    """Fehlertext der offiziellen API (statusName/code/message) lesbar machen."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None
+    if isinstance(data, dict) and data.get("message"):
+        code = data.get("code") or data.get("statusName") or ""
+        return f"{data['message']} ({code})" if code else str(data["message"])
+    return None
+
+
 class UniFiClient:
     """Zugriff auf Legacy-API (/api/s/<site>), v2-API und Integration-API."""
 
@@ -72,6 +89,7 @@ class UniFiClient:
         self._legacy = f"{base}/api/s/{site}/"
         self._v2 = f"{base}/v2/api/site/{site}/"
         self._integration = f"{base}/integration/v1/"
+        self._site_id: str | None = None
 
     # ------------------------------------------------------------------ core
     def resolve(self, path: str) -> tuple[str, bool]:
@@ -85,9 +103,56 @@ class UniFiClient:
             return self._integration + path[12:], False
         return self._legacy + path, True
 
+    async def site_id(self) -> str:
+        """UUID der Site für die offizielle API (Site „default“ → internalReference)."""
+        if self._site_id:
+            return self._site_id
+        res = await self.request("GET", "integration/sites?limit=200")
+        sites = (res or {}).get("data", []) if isinstance(res, dict) else []
+        for s in sites:
+            if self.site in (s.get("internalReference"), s.get("id"), s.get("name")):
+                self._site_id = s["id"]
+                return self._site_id
+        if len(sites) == 1:
+            self._site_id = sites[0]["id"]
+            return self._site_id
+        raise UniFiApiError(f"Site {self.site} in der Integration-API nicht gefunden")
+
+    async def _expand(self, path: str) -> str:
+        if path.lstrip("/").startswith("integration/") and any(
+                p in path for p in SITE_PLACEHOLDERS):
+            sid = await self.site_id()
+            for p in SITE_PLACEHOLDERS:
+                path = path.replace(p, sid)
+        return path
+
+    async def integration(self, method: str, path: str, payload: Any = None) -> Any:
+        """Aufruf der offiziellen API; ``path`` relativ zu integration/v1, {site} = Site-UUID."""
+        return await self.request(method, f"integration/{path.lstrip('/')}", payload)
+
+    async def integration_list(self, path: str, api_filter: str | None = None,
+                               page: int = PAGE_LIMIT) -> list[dict]:
+        """Alle Seiten einer Liste der offiziellen API (offset/limit/totalCount)."""
+        from urllib.parse import quote  # noqa: PLC0415
+
+        out: list[dict] = []
+        offset = 0
+        sep = "&" if "?" in path else "?"
+        flt = f"&filter={quote(api_filter, safe='')}" if api_filter else ""
+        while True:
+            res = await self.integration(
+                "GET", f"{path}{sep}offset={offset}&limit={page}{flt}") or {}
+            batch = res.get("data", []) if isinstance(res, dict) else list(res)
+            out.extend(batch)
+            total = res.get("totalCount", len(out)) if isinstance(res, dict) else len(out)
+            offset += len(batch)
+            if not batch or offset >= total or len(out) >= MAX_ITEMS:
+                return out
+
     async def request(self, method: str, path: str, payload: Any = None) -> Any:
         """API-Aufruf; lesende Aufrufe werden bei vorübergehenden Fehlern einmal wiederholt."""
         method = method.upper()
+        path = await self._expand(path)
         if method not in ALLOWED_METHODS:
             raise UniFiApiError(f"Methode {method} nicht erlaubt")
         retry = method == "GET" or (
@@ -115,7 +180,8 @@ class UniFiClient:
                     if resp.status >= 500:
                         raise UniFiTransientError(f"HTTP {resp.status} {path}: {text[:2000]}")
                     if resp.status >= 400:
-                        raise UniFiApiError(f"HTTP {resp.status} {path}: {text[:2000]}")
+                        msg = (_integration_error(text) if not legacy else None) or text[:2000]
+                        raise UniFiApiError(f"HTTP {resp.status} {path}: {msg}")
         except (aiohttp.ClientError, TimeoutError) as err:
             raise UniFiTransientError(f"Verbindung zu {self.host} fehlgeschlagen: {err}") from err
 

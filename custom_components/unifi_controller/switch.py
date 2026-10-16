@@ -12,6 +12,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from .api import UniFiApiError
 from .const import CONF_CLIENT_SWITCHES, CONF_SWITCH_GROUPS
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
+from .integration import switches as integration_switches
 from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .flows import APP_DOMAINS, DEFAULT_BLOCK_APPS
@@ -47,6 +48,7 @@ async def async_setup_entry(
                     continue
                 seen.add(suffix)
                 yield ResourceSwitch(coordinator, group, obj_id)
+        yield from integration_switches(coordinator)
         if zone_id(data, "external") and region_state(data)["zones"]:
             yield RegionSwitch(coordinator)
         for nid in coordinator.apps.network_ids:
