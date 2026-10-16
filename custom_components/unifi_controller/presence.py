@@ -329,8 +329,12 @@ class PresenceManager:
         if not mac:
             return "Zuhause"
         entry_id = self.coordinator.config_entry.entry_id
-        device = dr.async_get(self.hass).async_get_device(
-            identifiers={(DOMAIN, f"{entry_id}_{mac}")})
+        reg = dr.async_get(self.hass)
+        ident = (DOMAIN, f"{entry_id}_{mac}")
+        if (by_ident := getattr(reg, "async_get_device_by_identifier", None)) is not None:
+            device = by_ident(ident, entry_id)      # HA ≥ 2026.10, ohne Deprecation-Prüfung
+        else:
+            device = reg.async_get_device(identifiers={ident})
         if device and device.area_id and (area := ar.async_get(self.hass).async_get_area(
                 device.area_id)):
             return area.name

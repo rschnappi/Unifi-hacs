@@ -208,6 +208,9 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
             else:
                 out[name] = _index(items, "_id")
         out["wg_users"] = wg
+        from .integration import async_fetch  # noqa: PLC0415
+
+        await async_fetch(self, out, prev)
 
     def find(self, dataset: str, ident: str) -> dict:
         """Objekt per _id oder eindeutigem Namen finden."""

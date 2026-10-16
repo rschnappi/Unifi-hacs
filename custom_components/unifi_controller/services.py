@@ -19,6 +19,8 @@ from .coordinator import UniFiCoordinator
 from .flows import APP_DOMAINS, async_query
 from .logs import parse_entry
 from .region import async_apply, country_names
+from .integration import RESOURCES as INT_RESOURCES
+from .integration import body_of, device_uuid, quote_filter, voucher_view
 from .resources import DATASETS, object_name, redact
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan
 
@@ -32,6 +34,7 @@ ATTR_OBJECT = "object"
 BASE = {vol.Optional(ATTR_ENTRY): cv.string}
 MAC_SCHEMA = vol.Schema({**BASE, vol.Required(ATTR_MAC): cv.string})
 RESOURCE = vol.In(list(DATASETS))
+ANY_RESOURCE = vol.In([*DATASETS, *INT_RESOURCES])
 
 
 def _valid_ip(value: str) -> str:
@@ -84,7 +87,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
     async def get_objects(call: ServiceCall) -> ServiceResponse:
         c = _coordinator(hass, call)
         dataset = call.data[ATTR_RESOURCE]
-        if call.data.get("refresh") or dataset not in c.data.config:
+        if dataset in INT_RESOURCES and dataset not in DATASETS:
+            if call.data.get("refresh") or call.data.get("api_filter") or \
+                    dataset not in c.data.config:
+                objs = await _run(c.client.integration_list(
+                    INT_RESOURCES[dataset], call.data.get("api_filter"),
+                    page=1000 if dataset == "vouchers" else 200))
+            else:
+                objs = list(c.data.config[dataset].values())
+        elif call.data.get("refresh") or dataset not in c.data.config:
             objs = await _run(c.client.list_objects(DATASETS[dataset]))
         else:
             objs = list(c.data.config[dataset].values())
@@ -338,22 +349,158 @@ def async_setup_services(hass: HomeAssistant) -> None:
             raise ServiceValidationError("enabled oder passphrase angeben")
         await _run(c.async_update_object("wlans", obj, changes))
 
+    # ------------------------------------------------------------ offizielle API
+    async def create_vouchers(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        body: dict[str, Any] = {"count": call.data["count"], "name": call.data["name"],
+                                "timeLimitMinutes": call.data["minutes"]}
+        for key, api in (("guest_limit", "authorizedGuestLimit"),
+                         ("data_mb", "dataUsageLimitMBytes"),
+                         ("down_kbps", "rxRateLimitKbps"), ("up_kbps", "txRateLimitKbps")):
+            if key in call.data:
+                body[api] = call.data[key]
+        res = await _run(c.async_command(
+            c.client.integration("POST", "sites/{site}/hotspot/vouchers", body)))
+        vouchers = [voucher_view(v) for v in (res or {}).get("vouchers", [])]
+        if call.data.get("notify") and vouchers:
+            from .notifications import async_send  # noqa: PLC0415
+
+            hours = call.data["minutes"] / 60
+            dauer = f"{hours:g} h" if hours >= 1 else f"{call.data['minutes']} min"
+            lines = "\n".join(f"- `{v['code']}`" for v in vouchers)
+            await async_send(hass, c.config_entry.options, "new_device",
+                             f"Gast-WLAN: {len(vouchers)} Gutschein(e) „{call.data['name']}“",
+                             f"Gültig {dauer} ab erster Anmeldung:\n{lines}",
+                             {"tag": f"vouchers_{call.data['name']}"})
+        return {"count": len(vouchers), "vouchers": vouchers}
+
+    async def get_vouchers(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        objs = await _run(c.client.integration_list(
+            "sites/{site}/hotspot/vouchers",
+            None if call.data.get("include_expired") else "expired.eq(false)", page=1000))
+        return {"count": len(objs), "vouchers": [voucher_view(v) for v in objs]}
+
+    async def delete_vouchers(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        parts = []
+        if call.data.get("expired"):
+            parts.append("expired.eq(true)")
+        if name := call.data.get("name"):
+            parts.append(f"name.eq({quote_filter(name)})")
+        if code := call.data.get("code"):
+            parts.append(f"code.eq({quote_filter(str(code).replace('-', '').strip())})")
+        if not parts:
+            raise ServiceValidationError("expired, name oder code angeben")
+        flt = parts[0] if len(parts) == 1 else f"and({', '.join(parts)})"
+        from urllib.parse import quote  # noqa: PLC0415
+
+        res = await _run(c.async_command(c.client.integration(
+            "DELETE", f"sites/{{site}}/hotspot/vouchers?filter={quote(flt, safe='')}")))
+        return {"deleted": (res or {}).get("vouchersDeleted", 0), "filter": flt}
+
+    async def adopt_device(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        res = await _run(c.async_command(c.client.integration(
+            "POST", "sites/{site}/devices",
+            {"macAddress": call.data[ATTR_MAC].lower(),
+             "ignoreDeviceLimit": call.data["ignore_device_limit"]})))
+        return {"device": redact(res)}
+
+    async def device_statistics(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        try:
+            uid = device_uuid(c, call.data[ATTR_MAC])
+        except UniFiApiError as err:
+            raise ServiceValidationError(str(err)) from err
+        res = await _run(c.client.integration(
+            "GET", f"sites/{{site}}/devices/{uid}/statistics/latest"))
+        return {"mac": call.data[ATTR_MAC].lower(), "id": uid, "statistics": res}
+
+    async def set_firewall_logging(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        ident = call.data["policy"].strip()
+        flt = ident if ident.count("-") == 4 and len(ident) == 36 else None
+        pols = await _run(c.client.integration_list(
+            "sites/{site}/firewall/policies",
+            f"id.eq({flt})" if flt else f"name.eq({quote_filter(ident)})"))
+        if len(pols) != 1:
+            raise ServiceValidationError(
+                f"Firewall-Policy „{ident}“ " + ("mehrdeutig" if pols else "nicht gefunden"))
+        body = {k: call.data[s] for s, k in (("logging", "loggingEnabled"),
+                                             ("report_flow", "reportFlowEnabled"))
+                if s in call.data}
+        if not body:
+            raise ServiceValidationError("logging oder report_flow angeben")
+        res = await _run(c.async_command(c.client.integration(
+            "PATCH", f"sites/{{site}}/firewall/policies/{pols[0]['id']}", body)))
+        return {"policy": (res or {}).get("name"), "loggingEnabled": (res or {}).get(
+            "loggingEnabled"), "reportFlowEnabled": (res or {}).get("reportFlowEnabled")}
+
+    async def set_acl_rule(call: ServiceCall) -> None:
+        c = _coordinator(hass, call)
+        ident = call.data["rule"].strip().lower()
+        rules = [r for r in c.data.config.get("acl_rules", {}).values()
+                 if ident in (str(r.get("id", "")).lower(), str(r.get("name", "")).lower())]
+        if len(rules) != 1:
+            raise ServiceValidationError(
+                f"ACL-Regel „{call.data['rule']}“ " + ("mehrdeutig" if rules else "nicht gefunden"))
+        await _run(c.async_command(c.client.integration(
+            "PUT", f"sites/{{site}}/acl-rules/{rules[0]['id']}",
+            body_of(rules[0], {"enabled": call.data["enabled"]}))))
+
     reg = hass.services.async_register
     reg(DOMAIN, "api_request", api_request, schema=vol.Schema({
         **BASE,
         vol.Required("method", default="GET"): vol.All(
-            cv.string, vol.Upper, vol.In(["GET", "POST", "PUT", "DELETE"])),
+            cv.string, vol.Upper, vol.In(["GET", "POST", "PUT", "PATCH", "DELETE"])),
         vol.Required("path"): cv.string,
         vol.Optional("payload"): vol.Any(dict, list),
         vol.Optional("include_secrets", default=False): cv.boolean,
     }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "get_objects", get_objects, schema=vol.Schema({
         **BASE,
-        vol.Required(ATTR_RESOURCE): RESOURCE,
+        vol.Required(ATTR_RESOURCE): ANY_RESOURCE,
         vol.Optional("filter"): cv.string,
+        vol.Optional("api_filter"): cv.string,
         vol.Optional("refresh", default=False): cv.boolean,
         vol.Optional("include_secrets", default=False): cv.boolean,
     }), supports_response=SupportsResponse.ONLY)
+    reg(DOMAIN, "create_vouchers", create_vouchers, schema=vol.Schema({
+        **BASE,
+        vol.Required("name"): vol.All(cv.string, vol.Length(min=1)),
+        vol.Optional("count", default=1): vol.All(vol.Coerce(int), vol.Range(min=1, max=1000)),
+        vol.Optional("minutes", default=1440): vol.All(vol.Coerce(int),
+                                                       vol.Range(min=1, max=1000000)),
+        vol.Optional("guest_limit"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("data_mb"): vol.All(vol.Coerce(int), vol.Range(min=1, max=1048576)),
+        vol.Optional("down_kbps"): vol.All(vol.Coerce(int), vol.Range(min=2, max=100000)),
+        vol.Optional("up_kbps"): vol.All(vol.Coerce(int), vol.Range(min=2, max=100000)),
+        vol.Optional("notify", default=True): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "get_vouchers", get_vouchers, schema=vol.Schema({
+        **BASE, vol.Optional("include_expired", default=False): cv.boolean,
+    }), supports_response=SupportsResponse.ONLY)
+    reg(DOMAIN, "delete_vouchers", delete_vouchers, schema=vol.Schema({
+        **BASE,
+        vol.Optional("expired"): cv.boolean,
+        vol.Optional("name"): cv.string,
+        vol.Optional("code"): cv.string,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "adopt_device", adopt_device, schema=MAC_SCHEMA.extend({
+        vol.Optional("ignore_device_limit", default=False): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "device_statistics", device_statistics, schema=MAC_SCHEMA,
+        supports_response=SupportsResponse.ONLY)
+    reg(DOMAIN, "set_firewall_logging", set_firewall_logging, schema=vol.Schema({
+        **BASE,
+        vol.Required("policy"): cv.string,
+        vol.Optional("logging"): cv.boolean,
+        vol.Optional("report_flow"): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "set_acl_rule", set_acl_rule, schema=vol.Schema({
+        **BASE, vol.Required("rule"): cv.string, vol.Required("enabled"): cv.boolean,
+    }))
     reg(DOMAIN, "update_object", update_object, schema=vol.Schema({
         **BASE,
         vol.Required(ATTR_RESOURCE): RESOURCE,
