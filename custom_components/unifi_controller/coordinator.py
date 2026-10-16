@@ -60,6 +60,33 @@ def _index(items: list[dict] | None, key: str) -> dict[str, dict]:
     return out
 
 
+SPEEDTEST_DAYS = 30
+
+
+def _merge_speedtests(out: dict[str, dict[str, dict]], prev: dict[str, dict[str, dict]],
+                      now_ms: int) -> None:
+    """Archiv + letzter Status zu einem Verlauf zusammenführen (Network 11: Archiv leer).
+
+    Der Status liefert nur den jüngsten Test; ältere bleiben aus den vorigen Abrufen erhalten.
+    """
+    tests = dict(prev.get("speedtests", {}))
+    tests.update(out.get("speedtests", {}))
+    last = (out.get("speedtest_last") or {}).get("last")
+    if last and last.get("rundate"):
+        ts = int(last["rundate"]) * 1000
+        ok = all(last.get(k) == 2 for k in ("status_download", "status_upload")) \
+            if "status_download" in last else True
+        tests[str(ts)] = {
+            "time": ts, "latency": last.get("latency"),
+            "xput_download": last.get("xput_download") if ok else 0,
+            "xput_upload": last.get("xput_upload") if ok else 0,
+            "interface": last.get("interface_name"),
+            "server": (last.get("server") or {}).get("city"),
+        }
+    cutoff = now_ms - SPEEDTEST_DAYS * 86_400_000
+    out["speedtests"] = {k: t for k, t in tests.items() if (t.get("time") or 0) >= cutoff}
+
+
 class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
     config_entry: UniFiConfigEntry
 
@@ -186,6 +213,9 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
                 "attrs": ["xput_download", "xput_upload", "latency", "time"],
                 "start": now - 30 * 86_400_000, "end": now}),
             "backups": self.client.request("POST", "cmd/backup", {"cmd": "list-backups"}),
+            # Network 11 legt Tests nicht mehr im Archiv ab – letzter Test über den Status
+            "speedtest_status": self.client.request(
+                "POST", "cmd/devmgr", {"cmd": "speedtest-status"}),
         }
         results = await asyncio.gather(*jobs.values(), return_exceptions=True)
         wg: dict[str, dict] = {}
@@ -197,6 +227,8 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
                     self._failed.add(name)
                 if name == "wg_users":
                     wg.update(prev.get("wg_users", {}))
+                elif name == "speedtest_status":
+                    pass
                 else:
                     out[name] = prev.get(name, {})
                 continue
@@ -205,9 +237,15 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
                 wg.update(_index(items, "_id"))
             elif name == "backups":
                 out[name] = {b.get("filename", str(i)): b for i, b in enumerate(items)}
+            elif name == "speedtest_status":
+                out["speedtest_last"] = {"last": items[0]} if items else {}
+            elif name == "speedtests":
+                out[name] = {str(t.get("time") or t.get("_id") or i): t
+                             for i, t in enumerate(items)}
             else:
                 out[name] = _index(items, "_id")
         out["wg_users"] = wg
+        _merge_speedtests(out, prev, now)
         from .integration import async_fetch  # noqa: PLC0415
 
         await async_fetch(self, out, prev)
