@@ -105,7 +105,14 @@ from .presence import (
     device_options,
 )
 from .notifications import NOTIFY_CATEGORIES, PERSISTENT as PERSISTENT_TARGET, notify_targets, option_key
-from .region import async_apply, async_country_codes, state as region_state, target_zones, zone_id
+from .region import (
+    async_apply,
+    async_country_codes,
+    state as region_state,
+    target_zones,
+    zone_id,
+    zone_of_network,
+)
 from .resources import SWITCH_GROUP_KEYS, SWITCH_GROUPS
 
 GROUP_LABELS = {
@@ -290,7 +297,7 @@ class KidSubentryFlow(ConfigSubentryFlow):
         zone = kid_zone(data) if data else None
         nets = {nid: n.get("name", nid) for nid, n in (data.config.get("networks", {}) if data else {}).items()
                 if n.get("purpose") == "corporate" and nid not in used
-                and (not zone or n.get("firewall_zone_id") == zone)}
+                and (not zone or zone_of_network(data, n) == zone)}
         return {NEW_NETWORK: "➕ Neues Netz anlegen (VLAN + Subnetz automatisch)", **nets}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:

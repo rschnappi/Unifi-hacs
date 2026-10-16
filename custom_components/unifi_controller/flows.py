@@ -145,8 +145,10 @@ def default_kid_networks(coordinator: UniFiCoordinator) -> list[str]:
         return []
     zones = {zid for zid, z in data.config.get("firewall_zones", {}).items()
              if (z.get("name") or "").lower() in ("kinder", "kids", "children")}
+    from .region import zone_of_network  # noqa: PLC0415
+
     return [nid for nid, n in data.config.get("networks", {}).items()
-            if n.get("firewall_zone_id") in zones]
+            if zone_of_network(data, n) in zones]
 
 
 class AppUsage:

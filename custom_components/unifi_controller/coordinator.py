@@ -25,7 +25,14 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DOMAIN,
 )
-from .resources import DATASETS, OPTIONAL_DATASETS, VOLATILE
+from .resources import (
+    DATASETS,
+    LOCAL_FIELDS,
+    OFFICIAL,
+    OPTIONAL_DATASETS,
+    VOLATILE,
+    official_body,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -58,6 +65,15 @@ def _index(items: list[dict] | None, key: str) -> dict[str, dict]:
         if (k := item.get(key)) is not None:
             out[str(k).lower() if key == "mac" else str(k)] = item
     return out
+
+
+def _link_zones(out: dict[str, dict[str, dict]]) -> None:
+    """Offizielle Zonen mit den internen Zonen-IDs verknüpfen (interne Netze kennen nur diese)."""
+    by_ext = {z.get("external_id"): z for z in out.get("legacy_zones", {}).values()}
+    for zid, zone in out.get("firewall_zones", {}).items():
+        if (legacy := by_ext.get(zid)) is not None:
+            zone["internal_zone_id"] = legacy.get("_id")
+            zone["internal_network_ids"] = legacy.get("network_ids") or []
 
 
 SPEEDTEST_DAYS = 30
@@ -182,11 +198,14 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
 
     async def _fetch_config(self, prev: dict[str, dict[str, dict]]) -> dict[str, dict[str, dict]]:
         keys = list(self.datasets)
+        official = list(OFFICIAL)
         results = await asyncio.gather(
-            *(self.client.list_objects(self.datasets[k]) for k in keys), return_exceptions=True
+            *(self.client.list_objects(self.datasets[k]) for k in keys),
+            *(self.client.integration_list(OFFICIAL[k]) for k in official),
+            return_exceptions=True,
         )
         out: dict[str, dict[str, dict]] = {}
-        for key, res in zip(keys, results, strict=True):
+        for key, res in zip([*keys, *official], results, strict=True):
             if isinstance(res, UniFiAuthError):
                 raise ConfigEntryAuthFailed("API-Key abgelehnt") from res
             if isinstance(res, BaseException):
@@ -196,7 +215,11 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
                 out[key] = prev.get(key, {})
                 continue
             self._failed.discard(key)
-            out[key] = _index(res, "_id")
+            if key in OFFICIAL:
+                out[key] = {o["id"]: {**o, "_id": o["id"]} for o in res if o.get("id")}
+            else:
+                out[key] = _index(res, "_id")
+        _link_zones(out)
         await self._fetch_extras(out, prev)
         return out
 
@@ -264,11 +287,26 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
             f"{dataset}: '{ident}' " + ("mehrdeutig" if hits else "nicht gefunden")
         )
 
-    async def async_update_object(self, dataset: str, obj: dict, changes: dict) -> Any:
-        body = {k: v for k, v in obj.items() if k not in VOLATILE} | changes
-        return await self.async_command(
-            self.client.update_object(DATASETS[dataset], obj["_id"], body)
-        )
+    async def async_update_object(self, dataset: str, obj: dict, changes: dict,
+                                  refresh: bool = True) -> Any:
+        if dataset in OFFICIAL:
+            coro = self.client.integration(
+                "PUT", f"{OFFICIAL[dataset]}/{obj['_id']}", official_body(obj, changes))
+        else:
+            body = {k: v for k, v in obj.items()
+                    if k not in VOLATILE and k not in LOCAL_FIELDS - {"_id"}} | changes
+            coro = self.client.update_object(DATASETS[dataset], obj["_id"], body)
+        return await (self.async_command(coro) if refresh else coro)
+
+    async def async_create_object(self, dataset: str, body: dict, refresh: bool = True) -> Any:
+        coro = (self.client.integration("POST", OFFICIAL[dataset], body)
+                if dataset in OFFICIAL else self.client.create_object(DATASETS[dataset], body))
+        return await (self.async_command(coro) if refresh else coro)
+
+    async def async_delete_object(self, dataset: str, obj: dict, refresh: bool = True) -> Any:
+        coro = (self.client.integration("DELETE", f"{OFFICIAL[dataset]}/{obj['_id']}")
+                if dataset in OFFICIAL else self.client.delete_object(DATASETS[dataset], obj["_id"]))
+        return await (self.async_command(coro) if refresh else coro)
 
     async def async_command(self, coro) -> Any:
         """Schreibbefehl ausführen und danach sofort alles neu laden."""
