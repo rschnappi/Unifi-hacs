@@ -176,7 +176,7 @@ class UniFiClient:
                 ) as resp:
                     text = await resp.text()
                     if resp.status in (401, 403):
-                        raise UniFiAuthError(f"HTTP {resp.status}")
+                        raise UniFiAuthError(f"HTTP {resp.status} {path}")
                     if resp.status >= 500:
                         raise UniFiTransientError(f"HTTP {resp.status} {path}: {text[:2000]}")
                     if resp.status >= 400:
