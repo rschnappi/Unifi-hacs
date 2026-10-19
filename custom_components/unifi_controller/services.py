@@ -522,6 +522,9 @@ def async_setup_services(hass: HomeAssistant) -> None:
         if not call.data.get("dry_run") and todo:
             fw.enqueue(todo)
         return {"gestartet": bool(todo) and not call.data.get("dry_run"),
+                "geraete": len(todo),
+                "wellen": max((r.get("welle") or 0 for r in plan), default=0),
+                "grenzen": fw.limits,
                 "reihenfolge": plan}
 
     reg = hass.services.async_register

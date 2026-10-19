@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import ipaddress
+import re
 from typing import Any
 
 import voluptuous as vol
@@ -38,6 +39,14 @@ from .const import (
     CONF_BAN_GROUP,
     CONF_CLIENT_SWITCHES,
     CONF_FW_MANUAL,
+    CONF_FW_MAX_AP,
+    CONF_FW_MAX_SWITCH,
+    CONF_FW_MAX_SWITCH_SITE,
+    CONF_FW_SITE_PATTERN,
+    DEFAULT_FW_MAX_AP,
+    DEFAULT_FW_MAX_SWITCH,
+    DEFAULT_FW_MAX_SWITCH_SITE,
+    DEFAULT_FW_SITE_PATTERN,
     CONF_CONFIG_INTERVAL,
     CONF_F2B,
     CONF_F2B_BANTIME,
@@ -484,8 +493,15 @@ class UniFiControllerOptionsFlow(OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
         """Geräte, die nie automatisch/als Sammel-Update aktualisiert werden."""
+        errors: dict[str, str] = {}
         if user_input is not None:
-            return self.async_create_entry(data={**self.config_entry.options, **user_input})
+            try:
+                re.compile(user_input.get(CONF_FW_SITE_PATTERN) or DEFAULT_FW_SITE_PATTERN)
+            except re.error:
+                errors[CONF_FW_SITE_PATTERN] = "invalid_pattern"
+            else:
+                return self.async_create_entry(data={**self.config_entry.options, **user_input})
+        o = self.config_entry.options
         coordinator = getattr(self.config_entry, "runtime_data", None)
         devices = coordinator.data.devices if coordinator and coordinator.data else {}
         labels = {
@@ -501,8 +517,18 @@ class UniFiControllerOptionsFlow(OptionsFlow):
                     options=[SelectOptionDict(value=k, label=v)
                              for k, v in sorted(labels.items(), key=lambda i: i[1].lower())],
                     multiple=True, mode=SelectSelectorMode.LIST)),
+            vol.Required(CONF_FW_MAX_AP, default=o.get(CONF_FW_MAX_AP, DEFAULT_FW_MAX_AP)):
+                vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+            vol.Required(CONF_FW_MAX_SWITCH,
+                         default=o.get(CONF_FW_MAX_SWITCH, DEFAULT_FW_MAX_SWITCH)):
+                vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+            vol.Required(CONF_FW_MAX_SWITCH_SITE,
+                         default=o.get(CONF_FW_MAX_SWITCH_SITE, DEFAULT_FW_MAX_SWITCH_SITE)):
+                vol.All(vol.Coerce(int), vol.Range(min=1, max=50)),
+            vol.Required(CONF_FW_SITE_PATTERN,
+                         default=o.get(CONF_FW_SITE_PATTERN, DEFAULT_FW_SITE_PATTERN)): str,
         })
-        return self.async_show_form(step_id="firmware", data_schema=schema)
+        return self.async_show_form(step_id="firmware", data_schema=schema, errors=errors)
 
     async def async_step_region(
         self, user_input: dict[str, Any] | None = None

@@ -40,6 +40,14 @@ CONF_VPN_ENDPOINT = "vpn_endpoint"
 
 # Firmware
 CONF_FW_MANUAL = "firmware_manual"   # MACs: nur einzeln/manuell aktualisieren
+CONF_FW_MAX_AP = "firmware_max_ap"
+CONF_FW_MAX_SWITCH = "firmware_max_switch"
+CONF_FW_MAX_SWITCH_SITE = "firmware_max_switch_site"
+CONF_FW_SITE_PATTERN = "firmware_site_pattern"
+DEFAULT_FW_MAX_AP = 1
+DEFAULT_FW_MAX_SWITCH = 1
+DEFAULT_FW_MAX_SWITCH_SITE = 2
+DEFAULT_FW_SITE_PATTERN = r"^([^-]+)-"   # Standort = Teil vor dem ersten „-“ (B1-SW-… → B1)
 
 # Logs / Fail2Ban
 CONF_LOGS = "logs_enabled"
