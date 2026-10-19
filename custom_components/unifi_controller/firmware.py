@@ -4,7 +4,10 @@ Warum: Ein Gerät bekommt Strom (PoE) und Netz über sein Uplink-Gerät. Startet
 während ein nachgelagertes Gerät noch lädt oder flasht, bricht dessen Update ab – im
 schlimmsten Fall bleibt es hängen. Deshalb:
 
-* immer nur EIN Gerät gleichzeitig,
+* nie zwei Geräte auf demselben Pfad gleichzeitig (Uplink und Gerät dahinter),
+* parallel nur bis zu den eingestellten Grenzen: APs und Switches getrennt, je Standort
+  höchstens N-1 Switches (mindestens einer bleibt erreichbar, um die anderen zu retten),
+  Gateway immer allein,
 * von außen nach innen: Blätter zuerst (Mesh-AP, AP am Switch), dann Switches, Gateway zuletzt,
 * erst weiter, wenn das Gerät mit neuer Firmware zurück ist UND alle Geräte dahinter wieder
   online sind,
@@ -19,12 +22,23 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import logging
+import re
 import time
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import callback
 
-from .const import CONF_FW_MANUAL
+from .const import (
+    CONF_FW_MANUAL,
+    CONF_FW_MAX_AP,
+    CONF_FW_MAX_SWITCH,
+    CONF_FW_MAX_SWITCH_SITE,
+    CONF_FW_SITE_PATTERN,
+    DEFAULT_FW_MAX_AP,
+    DEFAULT_FW_MAX_SWITCH,
+    DEFAULT_FW_MAX_SWITCH_SITE,
+    DEFAULT_FW_SITE_PATTERN,
+)
 
 if TYPE_CHECKING:
     from .coordinator import UniFiCoordinator
@@ -40,6 +54,27 @@ START_TIMEOUT_S = 240       # so lange darf das Gerät brauchen, um mit dem Upda
 CHILD_TIMEOUT_S = 420       # nachgelagerte Geräte müssen danach wieder online sein
 DEFAULT_UPGRADE_S = 300
 DEFAULT_REBOOT_S = 180
+
+
+def kind(dev: dict) -> str:
+    """ap / switch / gateway / other – bestimmt die Gleichzeitigkeits-Grenze."""
+    t = (dev.get("type") or "").lower()
+    if t in GATEWAY_TYPES:
+        return "gateway"
+    if t == "uap":
+        return "ap"
+    if t == "usw":
+        return "switch"
+    return "other"
+
+
+def location(dev: dict, pattern: str) -> str:
+    """Standort aus dem Gerätenamen (erste Regex-Gruppe), sonst „—“."""
+    try:
+        m = re.search(pattern, dev.get("name") or "")
+    except re.error:
+        m = None
+    return (m.group(1) if m and m.groups() else m.group(0) if m else "—").upper()
 
 
 class FirmwareError(Exception):
@@ -160,17 +195,45 @@ def order(devices: dict[str, dict], macs: list[str] | None = None) -> list[str]:
 
 
 class FirmwareManager:
-    """Serialisiert Firmware-Updates eines Controllers in Topologie-Reihenfolge."""
+    """Führt Firmware-Updates eines Controllers in Topologie-Reihenfolge aus – parallel nur
+    innerhalb der eingestellten Grenzen."""
 
     def __init__(self, coordinator: UniFiCoordinator) -> None:
         self.c = coordinator
         self._pending: dict[str, asyncio.Future] = {}
+        self._active: dict[str, asyncio.Task] = {}
         self._runner: asyncio.Task | None = None
+        self._wake = asyncio.Event()
         self._cancel = False
-        self.current: str | None = None
-        self.status: dict[str, str] = {}      # mac → wartet/läuft/fertig/fehler/übersprungen
+        self._refresh_lock = asyncio.Lock()
+        self._last_refresh = 0.0
+        self.status: dict[str, str] = {}      # mac → wartet/läuft/fertig/fehler/abgebrochen
         self.results: list[dict[str, Any]] = []
         self.started: float | None = None
+
+    # ------------------------------------------------------------------ Einstellungen
+    @property
+    def _opts(self) -> dict[str, Any]:
+        return dict(self.c.config_entry.options)
+
+    @property
+    def manual(self) -> set[str]:
+        return {_mac(m) for m in self._opts.get(CONF_FW_MANUAL) or []}
+
+    @property
+    def limits(self) -> dict[str, int]:
+        o = self._opts
+        return {
+            "ap": max(1, int(o.get(CONF_FW_MAX_AP, DEFAULT_FW_MAX_AP))),
+            "switch": max(1, int(o.get(CONF_FW_MAX_SWITCH, DEFAULT_FW_MAX_SWITCH))),
+            "switch_site": max(1, int(o.get(CONF_FW_MAX_SWITCH_SITE,
+                                            DEFAULT_FW_MAX_SWITCH_SITE))),
+            "other": 1,
+        }
+
+    @property
+    def site_pattern(self) -> str:
+        return self._opts.get(CONF_FW_SITE_PATTERN) or DEFAULT_FW_SITE_PATTERN
 
     # ------------------------------------------------------------------ Abfragen
     @property
@@ -178,12 +241,12 @@ class FirmwareManager:
         return {_mac(k): v for k, v in (self.c.data.devices if self.c.data else {}).items()}
 
     @property
-    def manual(self) -> set[str]:
-        return {_mac(m) for m in self.c.config_entry.options.get(CONF_FW_MANUAL) or []}
-
-    @property
     def running(self) -> bool:
         return self._runner is not None and not self._runner.done()
+
+    @property
+    def current(self) -> list[str]:
+        return list(self._active)
 
     def busy(self, mac: str) -> bool:
         return self.status.get(_mac(mac)) in ("wartet", "läuft")
@@ -199,12 +262,57 @@ class FirmwareManager:
             return hits[0]
         raise FirmwareError(f"Gerät „{ident}“ nicht gefunden")
 
+    def site_switch_limit(self, devs: dict[str, dict], site: str) -> int:
+        """Je Standort: höchstens N-1 Switches gleichzeitig (einer bleibt zum Retten)."""
+        pattern = self.site_pattern
+        n = sum(1 for d in devs.values()
+                if kind(d) == "switch" and d.get("state") == ONLINE
+                and location(d, pattern) == site)
+        return min(self.limits["switch_site"], max(1, n - 1))
+
+    def _eligible(self, mac: str, devs: dict[str, dict], nodes: dict[str, Node],
+                  pending: set[str], active: set[str]) -> bool:
+        """Darf ``mac`` jetzt starten, während ``active`` laufen?"""
+        if mac not in nodes:
+            return True
+        # Pfad-Regel: erst alles dahinter, und nie gleichzeitig mit Uplink/Gerät dahinter
+        below = set(descendants(nodes, mac))
+        if below & (pending | active) or set(ancestors(nodes, mac)) & active:
+            return False
+        dev = devs[mac]
+        k = kind(dev)
+        kinds = [kind(devs[a]) for a in active if a in devs]
+        if k == "gateway":
+            return not active                     # Gateway immer allein …
+        if "gateway" in kinds:
+            return False                          # … und nichts neben dem Gateway
+        lim = self.limits
+        if kinds.count(k) >= lim.get(k, 1):
+            return False
+        if k == "switch":
+            site = location(dev, self.site_pattern)
+            same = sum(1 for a in active if a in devs and kind(devs[a]) == "switch"
+                       and location(devs[a], self.site_pattern) == site)
+            if same >= self.site_switch_limit(devs, site):
+                return False
+        return True
+
+    def _next(self, devs: dict[str, dict], pending: set[str], active: set[str]) -> list[str]:
+        """Geräte, die jetzt (zusätzlich zu ``active``) starten dürfen."""
+        nodes = topology(devs)
+        started: list[str] = []
+        for mac in sorted(pending, key=lambda m: sort_key(nodes, m)):
+            if self._eligible(mac, devs, nodes, pending - {mac}, active | set(started)):
+                started.append(mac)
+        return started
+
     def plan(self, macs: list[str] | None = None, include_manual: bool = False) -> list[dict]:
-        """Reihenfolge inkl. Begründung, warum ein Gerät (nicht) dabei ist."""
+        """Ablauf in Wellen (gleich lange Updates angenommen) inkl. Begründungen."""
         devs = self.devices
         nodes = topology(devs)
         explicit = macs is not None
-        rows: list[dict] = []
+        pattern = self.site_pattern
+        rows: dict[str, dict] = {}
         for mac in order(devs, macs):
             dev, node = devs[mac], nodes[mac]
             reason = None
@@ -214,20 +322,24 @@ class FirmwareManager:
                 reason = "nur manuell"
             elif dev.get("state") != ONLINE:
                 reason = "offline"
-            rows.append({
-                "mac": mac, "name": node.name, "model": dev.get("model"),
+            rows[mac] = {
+                "mac": mac, "name": node.name, "model": dev.get("model"), "typ": kind(dev),
+                "standort": location(dev, pattern),
                 "version": dev.get("version"), "neu": dev.get("upgrade_to_firmware"),
                 "uplink": nodes[node.parent].name if node.parent in nodes else None,
                 "verbindung": node.link, "tiefe": node.depth,
                 "hinter_diesem_geraet": [nodes[m].name for m in descendants(nodes, mac)],
                 "dabei": reason is None, "grund": reason or "wird aktualisiert",
-            })
-        pos = 0
-        for row in rows:
-            if row["dabei"]:
-                pos += 1
-                row["schritt"] = pos
-        return rows
+            }
+        pending = {m for m, r in rows.items() if r["dabei"]}
+        wave = 0
+        while pending:
+            wave += 1
+            batch = self._next(devs, pending, set()) or [min(pending)]
+            for m in batch:
+                rows[m]["welle"] = wave
+            pending -= set(batch)
+        return sorted(rows.values(), key=lambda r: (r.get("welle") or 999, r["name"]))
 
     # ------------------------------------------------------------------ Steuern
     @callback
@@ -249,32 +361,33 @@ class FirmwareManager:
             self.started = time.time()
             self._runner = self.c.config_entry.async_create_background_task(
                 self.c.hass, self._run(), f"unifi_firmware_{self.c.config_entry.entry_id}")
+        self._wake.set()
         self.c.async_update_listeners()
         return futs
 
     async def async_install(self, mac: str) -> None:
-        """Einzelnes Gerät – wartet, bis es (in Topologie-Reihenfolge) fertig ist."""
+        """Einzelnes Gerät – wartet, bis es (nach den Regeln) fertig aktualisiert ist."""
         mac = _mac(mac)
-        self._check_path(mac)
+        if mac not in self.devices:
+            raise FirmwareError("Gerät unbekannt")
         await self.enqueue([mac])[mac]
 
     @callback
     def cancel(self) -> list[str]:
-        """Wartende Updates verwerfen; ein laufendes Gerät wird noch fertig aktualisiert."""
+        """Wartende Updates verwerfen; laufende Geräte werden noch fertig aktualisiert."""
         self._cancel = True
-        dropped = [m for m in self._pending if m != self.current]
+        dropped = [m for m in self._pending if m not in self._active]
         for m in dropped:
             self._fail(m, "abgebrochen")
+        self._wake.set()
         return dropped
 
     def _check_path(self, mac: str) -> None:
-        """Kein Update, solange ein Gerät davor oder dahinter gerade aktualisiert."""
+        """Kein Update, solange ein Gerät davor oder dahinter (außerhalb von uns) aktualisiert."""
         devs = self.devices
-        if mac not in devs:
-            raise FirmwareError("Gerät unbekannt")
         nodes = topology(devs)
         for other in ancestors(nodes, mac) + descendants(nodes, mac):
-            if devs[other].get("state") in UPGRADING and other != self.current:
+            if devs[other].get("state") in UPGRADING:
                 raise FirmwareError(
                     f"{nodes[other].name} aktualisiert gerade – {nodes[mac].name} danach starten")
 
@@ -289,44 +402,73 @@ class FirmwareManager:
     # ------------------------------------------------------------------ Ablauf
     async def _run(self) -> None:
         await asyncio.sleep(COLLECT_S)
-        failed: str | None = None
+        failed: list[str] = []
         try:
-            while self._pending and not self._cancel:
-                devs = self.devices
-                nodes = topology(devs)
-                mac = min(self._pending, key=lambda m: sort_key(nodes, m))
-                self.current = mac
-                self.status[mac] = "läuft"
-                self.c.async_update_listeners()
-                name = dev_name(devs.get(mac), mac)
-                old = (devs.get(mac) or {}).get("version")
-                try:
-                    new = await self._upgrade(mac)
-                except FirmwareError as err:
-                    failed = f"{name}: {err}"
-                    self.results.append({"name": name, "von": old, "ergebnis": f"Fehler – {err}"})
-                    self._fail(mac, str(err))
-                    for other in list(self._pending):
-                        self._fail(other, f"abgebrochen, weil {name} fehlgeschlagen ist")
+            while self._pending or self._active:
+                if not failed and not self._cancel:
+                    devs = self.devices
+                    waiting = set(self._pending) - set(self._active)
+                    for mac in self._next(devs, waiting, set(self._active)):
+                        self._start(mac)
+                if not self._active:
+                    if self._pending and not failed and not self._cancel:
+                        # nichts startbar (z. B. Gerät unbekannt) → Rest abbrechen
+                        for m in list(self._pending):
+                            self._fail(m, "abgebrochen – nicht startbar")
                     break
-                except Exception as err:  # noqa: BLE001
-                    _LOGGER.exception("Firmware-Update %s", name)
-                    failed = f"{name}: {err}"
-                    self._fail(mac, str(err))
-                    for other in list(self._pending):
-                        self._fail(other, f"abgebrochen, weil {name} fehlgeschlagen ist")
-                    break
-                self.status[mac] = "fertig" if new != old else "übersprungen"
-                self.results.append({"name": name, "von": old, "auf": new,
-                                     "ergebnis": "ok" if new != old else "keine neue Firmware"})
-                fut = self._pending.pop(mac, None)
-                if fut and not fut.done():
-                    fut.set_result(new)
+                self._wake.clear()
+                wake = asyncio.ensure_future(self._wake.wait())
+                done, _ = await asyncio.wait({*self._active.values(), wake},
+                                             return_when=asyncio.FIRST_COMPLETED)
+                wake.cancel()
+                for mac, task in list(self._active.items()):
+                    if task not in done:
+                        continue
+                    del self._active[mac]
+                    err = task.exception()
+                    if err is not None:
+                        failed.append(f"{dev_name(self.devices.get(mac), mac)}: {err}")
+                if failed:
+                    for m in [m for m in self._pending if m not in self._active]:
+                        self._fail(m, f"abgebrochen, weil {failed[0].split(':')[0]} "
+                                      "fehlgeschlagen ist")
         finally:
-            self.current = None
             self.c.async_update_listeners()
             if self.results:
                 await self._notify(failed)
+
+    @callback
+    def _start(self, mac: str) -> None:
+        self.status[mac] = "läuft"
+        self._active[mac] = self.c.hass.async_create_task(self._one(mac), eager_start=False)
+        self.c.async_update_listeners()
+
+    async def _one(self, mac: str) -> None:
+        devs = self.devices
+        name = dev_name(devs.get(mac), mac)
+        old = (devs.get(mac) or {}).get("version")
+        try:
+            new = await self._upgrade(mac)
+        except Exception as err:
+            if not isinstance(err, FirmwareError):
+                _LOGGER.exception("Firmware-Update %s", name)
+            self.results.append({"name": name, "von": old, "ergebnis": f"Fehler – {err}"})
+            self._fail(mac, str(err))
+            raise
+        self.status[mac] = "fertig" if new != old else "übersprungen"
+        self.results.append({"name": name, "von": old, "auf": new,
+                             "ergebnis": "ok" if new != old else "keine neue Firmware"})
+        fut = self._pending.pop(mac, None)
+        if fut and not fut.done():
+            fut.set_result(new)
+
+    async def _refresh(self) -> None:
+        """Ein gemeinsamer Abruf für alle parallel laufenden Updates."""
+        async with self._refresh_lock:
+            if time.monotonic() - self._last_refresh < POLL_S / 2:
+                return
+            await self.c.async_refresh()
+            self._last_refresh = time.monotonic()
 
     async def _upgrade(self, mac: str) -> str | None:
         dev = self.devices.get(mac)
@@ -354,7 +496,7 @@ class FirmwareManager:
         went_down = False
         while True:
             await asyncio.sleep(POLL_S)
-            await self.c.async_refresh()
+            await self._refresh()
             d = self.devices.get(mac) or {}
             if not self.c.last_update_success or d.get("state") != ONLINE:
                 went_down = True        # Gateway: Controller selbst ist kurz weg
@@ -378,10 +520,10 @@ class FirmwareManager:
             if time.monotonic() - start > CHILD_TIMEOUT_S:
                 raise FirmwareError(f"danach nicht wieder online: {', '.join(missing)}")
             await asyncio.sleep(POLL_S)
-            await self.c.async_refresh()
+            await self._refresh()
         return (self.devices.get(mac) or {}).get("version")
 
-    async def _notify(self, failed: str | None) -> None:
+    async def _notify(self, failed: list[str]) -> None:
         from .notifications import async_send  # noqa: PLC0415
 
         lines = []
@@ -392,6 +534,7 @@ class FirmwareManager:
                 lines.append(f"✗ {r['name']}: {r['ergebnis']}")
         title = "Firmware-Update abgebrochen" if failed else "Firmware-Updates fertig"
         if failed:
-            lines.append(f"Gestoppt bei {failed}. Restliche Geräte wurden nicht angefasst.")
+            lines.append(f"Gestoppt nach Fehler bei {'; '.join(failed)}. Laufende Geräte wurden "
+                         "noch fertig aktualisiert, wartende nicht angefasst.")
         await async_send(self.c.hass, dict(self.c.config_entry.options), "updates", title,
                          "\n".join(lines), {"tag": "unifi_firmware"})

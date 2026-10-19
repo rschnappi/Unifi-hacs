@@ -377,17 +377,23 @@ data: {network: Benjamin, app: TikTok, blocked: true}
 Ein Gerät bekommt Netz und oft auch Strom (PoE) über sein Uplink-Gerät. Startet der Uplink
 neu, während ein Gerät dahinter noch lädt oder flasht, bricht dessen Update ab. Deshalb gilt:
 
-- immer nur **ein** Gerät gleichzeitig, **von außen nach innen**: Mesh-AP → AP → Switch → Gateway zuletzt
+- **von außen nach innen**: Mesh-AP → AP → Switch → Gateway zuletzt; ein Gerät und sein Uplink
+  laufen nie gleichzeitig
+- parallel nur bis zu den Grenzen unter **Optionen → Firmware-Updates**: max. APs, max. Switches
+  gesamt, max. Switches **je Standort**; je Standort bleibt immer mindestens ein Switch online, um
+  die anderen bei einem Fehler zu retten (bei 3 Switches also höchstens 2 gleichzeitig). Das Gateway
+  läuft immer allein. Standard: alles einzeln
+- Standort = Teil des Gerätenamens vor dem ersten „-“ (`IZW03-SWL-01` → `IZW03`), per Regex änderbar
 - weiter erst, wenn das Gerät mit neuer Firmware zurück ist **und** alles dahinter wieder online ist
-- beim ersten Fehler wird gestoppt, die übrigen Geräte bleiben unangetastet; Ergebnis über die
+- nach dem ersten Fehler starten keine weiteren Updates (laufende werden fertig); Ergebnis über die
   Benachrichtigungs-Kategorie *Updates*
-- Geräte auf der Liste **Optionen → Firmware-Updates → Nur manuell aktualisieren** überspringt das
-  Sammel-Update; einzeln installieren oder im Dienst ausdrücklich nennen geht weiterhin
+- Geräte auf der Liste **Nur manuell aktualisieren** überspringt das Sammel-Update; einzeln
+  installieren oder im Dienst ausdrücklich nennen geht weiterhin
 
 ```yaml
 action: unifi_controller.update_devices
 data:
-  dry_run: true          # nur Reihenfolge anzeigen
+  dry_run: true          # nur Plan anzeigen: Wellen, Standort, Grenzen
 ```
 
 Weitere Felder: `devices` (Namen/MACs), `include_manual`, `cancel`. Die Update-Entitäten zeigen
