@@ -380,10 +380,11 @@ neu, während ein Gerät dahinter noch lädt oder flasht, bricht dessen Update a
 - **von außen nach innen**: Mesh-AP → AP → Switch → Gateway zuletzt; ein Gerät und sein Uplink
   laufen nie gleichzeitig
 - parallel nur bis zu den Grenzen unter **Optionen → Firmware-Updates**: max. APs, max. Switches
-  gesamt, max. Switches **je Standort**; je Standort bleibt immer mindestens ein Switch online, um
+  gesamt, max. Switches **je Raum**; je Raum bleibt immer mindestens ein Switch online, um
   die anderen bei einem Fehler zu retten (bei 3 Switches also höchstens 2 gleichzeitig). Das Gateway
   läuft immer allein. Standard: alles einzeln
-- Standort = Teil des Gerätenamens vor dem ersten „-“ (`IZW03-SWL-01` → `IZW03`), per Regex änderbar
+- Raum = Home-Assistant-Bereich des Geräts; ohne Bereich der Teil des Gerätenamens vor dem ersten „-“
+  (`IZW03-SWL-01` → `IZW03`), per Regex änderbar
 - weiter erst, wenn das Gerät mit neuer Firmware zurück ist **und** alles dahinter wieder online ist
 - nach dem ersten Fehler starten keine weiteren Updates (laufende werden fertig); Ergebnis über die
   Benachrichtigungs-Kategorie *Updates*
@@ -393,7 +394,7 @@ neu, während ein Gerät dahinter noch lädt oder flasht, bricht dessen Update a
 ```yaml
 action: unifi_controller.update_devices
 data:
-  dry_run: true          # nur Plan anzeigen: Wellen, Standort, Grenzen
+  dry_run: true          # nur Plan anzeigen: Wellen, Raum, Grenzen
 ```
 
 Weitere Felder: `devices` (Namen/MACs), `include_manual`, `cancel`. Die Update-Entitäten zeigen
