@@ -38,6 +38,9 @@ CONF_NEW_CLIENT_NOTIFY = "new_client_notify"
 CONF_KID_NETWORKS = "kid_networks"
 CONF_VPN_ENDPOINT = "vpn_endpoint"
 
+# Firmware
+CONF_FW_MANUAL = "firmware_manual"   # MACs: nur einzeln/manuell aktualisieren
+
 # Logs / Fail2Ban
 CONF_LOGS = "logs_enabled"
 CONF_LOG_FILE = "log_file"
