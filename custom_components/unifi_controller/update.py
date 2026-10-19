@@ -10,7 +10,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import DeviceEntity, async_add_dynamic
-from .firmware import UPGRADING, FirmwareError, ancestors, descendants, location, topology
+from .firmware import UPGRADING, FirmwareError, ancestors, descendants, topology
 
 
 async def async_setup_entry(
@@ -66,7 +66,7 @@ class DeviceFirmwareUpdate(DeviceEntity, UpdateEntity):
             "ebene": node.depth,
             "vor_diesem_geraet": [nodes[m].name for m in ancestors(nodes, mac)],
             "hinter_diesem_geraet": [nodes[m].name for m in descendants(nodes, mac)],
-            "standort": location(self.device or {}, fw.site_pattern),
+            "raum": fw.room(mac, self.device),
             "nur_manuell": mac in fw.manual,
             "update_status": fw.status.get(mac),
         }

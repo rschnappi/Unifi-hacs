@@ -5,7 +5,7 @@ während ein nachgelagertes Gerät noch lädt oder flasht, bricht dessen Update 
 schlimmsten Fall bleibt es hängen. Deshalb:
 
 * nie zwei Geräte auf demselben Pfad gleichzeitig (Uplink und Gerät dahinter),
-* parallel nur bis zu den eingestellten Grenzen: APs und Switches getrennt, je Standort
+* parallel nur bis zu den eingestellten Grenzen: APs und Switches getrennt, je Raum
   höchstens N-1 Switches (mindestens einer bleibt erreichbar, um die anderen zu retten),
   Gateway immer allein,
 * von außen nach innen: Blätter zuerst (Mesh-AP, AP am Switch), dann Switches, Gateway zuletzt,
@@ -27,6 +27,7 @@ import time
 from typing import TYPE_CHECKING, Any
 
 from homeassistant.core import callback
+from homeassistant.helpers import area_registry as ar, device_registry as dr
 
 from .const import (
     CONF_FW_MANUAL,
@@ -38,6 +39,7 @@ from .const import (
     DEFAULT_FW_MAX_SWITCH,
     DEFAULT_FW_MAX_SWITCH_SITE,
     DEFAULT_FW_SITE_PATTERN,
+    DOMAIN,
 )
 
 if TYPE_CHECKING:
@@ -69,7 +71,7 @@ def kind(dev: dict) -> str:
 
 
 def location(dev: dict, pattern: str) -> str:
-    """Standort aus dem Gerätenamen (erste Regex-Gruppe), sonst „—“."""
+    """Raum aus dem Gerätenamen (erste Regex-Gruppe), sonst „—“ – nur Rückfall ohne HA-Bereich."""
     try:
         m = re.search(pattern, dev.get("name") or "")
     except re.error:
@@ -262,12 +264,25 @@ class FirmwareManager:
             return hits[0]
         raise FirmwareError(f"Gerät „{ident}“ nicht gefunden")
 
+    def room(self, mac: str, dev: dict | None = None) -> str:
+        """Raum = HA-Bereich des Geräts; ohne Bereich aus dem Gerätenamen."""
+        hass = self.c.hass
+        try:
+            entry = dr.async_get(hass).async_get_device(
+                identifiers={(DOMAIN, f"{self.c.config_entry.entry_id}_{_mac(mac)}")})
+            if entry and entry.area_id and (area := ar.async_get(hass).async_get_area(
+                    entry.area_id)):
+                return area.name
+        except Exception:  # noqa: BLE001 – Registry nicht verfügbar (Tests) → Name
+            pass
+        return location(dev if dev is not None else self.devices.get(_mac(mac)) or {},
+                        self.site_pattern)
+
     def site_switch_limit(self, devs: dict[str, dict], site: str) -> int:
-        """Je Standort: höchstens N-1 Switches gleichzeitig (einer bleibt zum Retten)."""
-        pattern = self.site_pattern
-        n = sum(1 for d in devs.values()
+        """Je Raum: höchstens N-1 Switches gleichzeitig (einer bleibt zum Retten)."""
+        n = sum(1 for m, d in devs.items()
                 if kind(d) == "switch" and d.get("state") == ONLINE
-                and location(d, pattern) == site)
+                and self.room(m, d) == site)
         return min(self.limits["switch_site"], max(1, n - 1))
 
     def _eligible(self, mac: str, devs: dict[str, dict], nodes: dict[str, Node],
@@ -290,9 +305,9 @@ class FirmwareManager:
         if kinds.count(k) >= lim.get(k, 1):
             return False
         if k == "switch":
-            site = location(dev, self.site_pattern)
+            site = self.room(mac, dev)
             same = sum(1 for a in active if a in devs and kind(devs[a]) == "switch"
-                       and location(devs[a], self.site_pattern) == site)
+                       and self.room(a, devs[a]) == site)
             if same >= self.site_switch_limit(devs, site):
                 return False
         return True
@@ -311,7 +326,6 @@ class FirmwareManager:
         devs = self.devices
         nodes = topology(devs)
         explicit = macs is not None
-        pattern = self.site_pattern
         rows: dict[str, dict] = {}
         for mac in order(devs, macs):
             dev, node = devs[mac], nodes[mac]
@@ -324,7 +338,7 @@ class FirmwareManager:
                 reason = "offline"
             rows[mac] = {
                 "mac": mac, "name": node.name, "model": dev.get("model"), "typ": kind(dev),
-                "standort": location(dev, pattern),
+                "raum": self.room(mac, dev),
                 "version": dev.get("version"), "neu": dev.get("upgrade_to_firmware"),
                 "uplink": nodes[node.parent].name if node.parent in nodes else None,
                 "verbindung": node.link, "tiefe": node.depth,
