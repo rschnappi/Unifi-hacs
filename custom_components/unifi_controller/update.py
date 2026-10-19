@@ -1,14 +1,16 @@
-"""Firmware-Updates der UniFi-Geräte als native Update-Entitäten."""
+"""Firmware-Updates der UniFi-Geräte als native Update-Entitäten (topologie-bewusst)."""
 from __future__ import annotations
 
 from typing import Any
 
 from homeassistant.components.update import UpdateDeviceClass, UpdateEntity, UpdateEntityFeature
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import DeviceEntity, async_add_dynamic
+from .firmware import UPGRADING, FirmwareError, ancestors, descendants, topology
 
 
 async def async_setup_entry(
@@ -26,6 +28,8 @@ async def async_setup_entry(
 
 
 class DeviceFirmwareUpdate(DeviceEntity, UpdateEntity):
+    """Installieren reiht das Gerät in die Topologie-Reihenfolge ein (nie zwei auf einem Pfad)."""
+
     _attr_device_class = UpdateDeviceClass.FIRMWARE
     _attr_supported_features = UpdateEntityFeature.INSTALL
 
@@ -45,7 +49,30 @@ class DeviceFirmwareUpdate(DeviceEntity, UpdateEntity):
 
     @property
     def in_progress(self) -> bool:
-        return (self.device or {}).get("state") == 4
+        return ((self.device or {}).get("state") in UPGRADING
+                or self.coordinator.firmware.busy(self._mac))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        fw = self.coordinator.firmware
+        nodes = topology(fw.devices)
+        mac = self._mac.lower()
+        node = nodes.get(mac)
+        if node is None:
+            return {}
+        return {
+            "uplink": nodes[node.parent].name if node.parent in nodes else None,
+            "verbindung": node.link,
+            "ebene": node.depth,
+            "vor_diesem_geraet": [nodes[m].name for m in ancestors(nodes, mac)],
+            "hinter_diesem_geraet": [nodes[m].name for m in descendants(nodes, mac)],
+            "nur_manuell": mac in fw.manual,
+            "update_status": fw.status.get(mac),
+        }
 
     async def async_install(self, version: str | None, backup: bool, **kwargs: Any) -> None:
-        await self.coordinator.async_command(self.coordinator.client.devmgr("upgrade", self._mac))
+        name = (self.device or {}).get("name") or self._mac
+        try:
+            await self.coordinator.firmware.async_install(self._mac)
+        except FirmwareError as err:
+            raise HomeAssistantError(f"Firmware-Update {name}: {err}") from err

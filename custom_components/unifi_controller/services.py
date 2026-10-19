@@ -505,7 +505,33 @@ def async_setup_services(hass: HomeAssistant) -> None:
         await _run(c.async_delete_object("dns_records", hits[0]))
         return {"deleted": object_name(hits[0])}
 
+    async def update_devices(call: ServiceCall) -> ServiceResponse:
+        """Firmware-Rollout in Topologie-Reihenfolge (Blätter zuerst, Gateway zuletzt)."""
+        from .firmware import FirmwareError  # noqa: PLC0415
+
+        c = _coordinator(hass, call)
+        fw = c.firmware
+        if call.data.get("cancel"):
+            return {"abgebrochen": fw.cancel(), "laeuft_noch": fw.current}
+        try:
+            macs = [fw.resolve(d) for d in call.data.get("devices") or []] or None
+        except FirmwareError as err:
+            raise ServiceValidationError(str(err)) from err
+        plan = fw.plan(macs, call.data.get("include_manual", False))
+        todo = [r["mac"] for r in plan if r["dabei"]]
+        if not call.data.get("dry_run") and todo:
+            fw.enqueue(todo)
+        return {"gestartet": bool(todo) and not call.data.get("dry_run"),
+                "reihenfolge": plan}
+
     reg = hass.services.async_register
+    reg(DOMAIN, "update_devices", update_devices, schema=vol.Schema({
+        **BASE,
+        vol.Optional("devices"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("include_manual", default=False): cv.boolean,
+        vol.Optional("dry_run", default=False): cv.boolean,
+        vol.Optional("cancel", default=False): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "api_request", api_request, schema=vol.Schema({
         **BASE,
         vol.Required("method", default="GET"): vol.All(

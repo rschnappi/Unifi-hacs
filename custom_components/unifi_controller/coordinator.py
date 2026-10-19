@@ -134,6 +134,9 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
             hass, self, entry.options.get(CONF_NEW_CLIENT_NOTIFY, True))
         self.apps = AppUsage(self, entry.options.get(CONF_KID_NETWORKS))
         self.kids: Any = None  # KidManager, wird in __init__.py gesetzt
+        from .firmware import FirmwareManager  # noqa: PLC0415
+
+        self.firmware = FirmwareManager(self)
 
     @property
     def datasets(self) -> dict[str, str]:

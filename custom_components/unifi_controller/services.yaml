@@ -731,3 +731,23 @@ delete_dns_record:
           - TXT
           - SRV
           - FORWARD
+update_devices:
+  fields:
+    config_entry_id: *id001
+    devices:
+      example: "Access Point Benjamin"
+      selector:
+        text:
+          multiple: true
+    include_manual:
+      default: false
+      selector:
+        boolean: {}
+    dry_run:
+      default: false
+      selector:
+        boolean: {}
+    cancel:
+      default: false
+      selector:
+        boolean: {}
