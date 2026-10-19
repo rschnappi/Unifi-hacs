@@ -364,13 +364,34 @@ data: {network: Benjamin, app: TikTok, blocked: true}
 
 | Entity / Service | Inhalt |
 | --- | --- |
-| `update.netz_<gerät>_firmware` | Firmware-Update je Gerät, installierbar aus *Einstellungen → Updates* |
+| `update.netz_<gerät>_firmware` | Firmware-Update je Gerät, installierbar aus *Einstellungen → Updates*. Mehrere gleichzeitig angestoßene Updates laufen nacheinander in Topologie-Reihenfolge (siehe unten) |
 | `button.netz_unifi_speedtest_starten`, `sensor.netz_unifi_speedtest_download/_upload/_latenz` | Speedtest (Fehlversuche, z. B. über eine tote WAN2, werden ignoriert) |
 | `binary_sensor.netz_<gateway>_wan1` / `_wan2`, `sensor.netz_<gateway>_aktive_wan_leitung` | WAN-Status inkl. Verfügbarkeit; Failover per Automation auf Zustandswechsel |
 | `sensor.netz_<gerät>_port_<n>` | Link-Speed (0 = kein Link); Fehler, Duplex, PoE, verbundenes Gerät, `problem: true` bei 10 Mbit/Halbduplex/vielen Fehlern |
 | `sensor.netz_<gerät>_temperatur_<sensor>` | Temperaturen (CPU, Board …) |
 | `button.netz_unifi_controller_backup_erstellen` | Backup erzeugen, herunterladen, unter `/config/unifi_controller_backups/` ablegen (letzte 10) |
 | `sensor.netz_unifi_letztes_controller_backup` | letztes automatisches Backup des Controllers |
+
+### Firmware in Topologie-Reihenfolge
+
+Ein Gerät bekommt Netz und oft auch Strom (PoE) über sein Uplink-Gerät. Startet der Uplink
+neu, während ein Gerät dahinter noch lädt oder flasht, bricht dessen Update ab. Deshalb gilt:
+
+- immer nur **ein** Gerät gleichzeitig, **von außen nach innen**: Mesh-AP → AP → Switch → Gateway zuletzt
+- weiter erst, wenn das Gerät mit neuer Firmware zurück ist **und** alles dahinter wieder online ist
+- beim ersten Fehler wird gestoppt, die übrigen Geräte bleiben unangetastet; Ergebnis über die
+  Benachrichtigungs-Kategorie *Updates*
+- Geräte auf der Liste **Optionen → Firmware-Updates → Nur manuell aktualisieren** überspringt das
+  Sammel-Update; einzeln installieren oder im Dienst ausdrücklich nennen geht weiterhin
+
+```yaml
+action: unifi_controller.update_devices
+data:
+  dry_run: true          # nur Reihenfolge anzeigen
+```
+
+Weitere Felder: `devices` (Namen/MACs), `include_manual`, `cancel`. Die Update-Entitäten zeigen
+`uplink`, `verbindung`, `vor_diesem_geraet`, `hinter_diesem_geraet` und `nur_manuell`.
 
 ## Migration von „UniFi Network Rules“
 

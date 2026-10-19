@@ -37,6 +37,7 @@ from .const import (
     CONF_API_KEY,
     CONF_BAN_GROUP,
     CONF_CLIENT_SWITCHES,
+    CONF_FW_MANUAL,
     CONF_CONFIG_INTERVAL,
     CONF_F2B,
     CONF_F2B_BANTIME,
@@ -459,7 +460,7 @@ class PersonSubentryFlow(ConfigSubentryFlow):
 class UniFiControllerOptionsFlow(OptionsFlow):
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
-            step_id="init", menu_options=["general", "logs", "region", "notify"])
+            step_id="init", menu_options=["general", "logs", "region", "notify", "firmware"])
 
     async def async_step_notify(
         self, user_input: dict[str, Any] | None = None
@@ -478,6 +479,30 @@ class UniFiControllerOptionsFlow(OptionsFlow):
             for cat in NOTIFY_CATEGORIES
         })
         return self.async_show_form(step_id="notify", data_schema=schema)
+
+    async def async_step_firmware(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Geräte, die nie automatisch/als Sammel-Update aktualisiert werden."""
+        if user_input is not None:
+            return self.async_create_entry(data={**self.config_entry.options, **user_input})
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        devices = coordinator.data.devices if coordinator and coordinator.data else {}
+        labels = {
+            mac.lower(): f"{d.get('name') or mac} ({d.get('model') or d.get('type') or '?'})"
+            for mac, d in devices.items()
+        }
+        current = [m for m in self.config_entry.options.get(CONF_FW_MANUAL, [])]
+        for m in current:
+            labels.setdefault(m, m)
+        schema = vol.Schema({
+            vol.Optional(CONF_FW_MANUAL, default=current): SelectSelector(
+                SelectSelectorConfig(
+                    options=[SelectOptionDict(value=k, label=v)
+                             for k, v in sorted(labels.items(), key=lambda i: i[1].lower())],
+                    multiple=True, mode=SelectSelectorMode.LIST)),
+        })
+        return self.async_show_form(step_id="firmware", data_schema=schema)
 
     async def async_step_region(
         self, user_input: dict[str, Any] | None = None
