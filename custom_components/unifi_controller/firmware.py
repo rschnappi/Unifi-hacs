@@ -87,6 +87,18 @@ class Node:
 def topology(devices: dict[str, dict]) -> dict[str, Node]:
     devices = {_mac(k): v for k, v in devices.items()}
     parents = {m: parent_of(m, devices) for m in devices}
+    # Gegenseitige Uplinks (z. B. Core-Switch-Paar ohne UniFi-Gateway) sind keine Hierarchie:
+    # alle Geräte eines Zyklus werden zu Wurzeln.
+    in_cycle: set[str] = set()
+    for start in devices:
+        path, cur = [], start
+        while cur and cur not in path and cur not in in_cycle:
+            path.append(cur)
+            cur = parents.get(cur)
+        if cur in path:
+            in_cycle.update(path[path.index(cur):])
+    for mac in in_cycle:
+        parents[mac] = None
     nodes: dict[str, Node] = {}
     for mac, dev in devices.items():
         depth, cur, seen = 0, parents[mac], {mac}
@@ -104,7 +116,8 @@ def topology(devices: dict[str, dict]) -> dict[str, Node]:
                 if p.get("port_idx") == port and p.get("poe_enable"):
                     link = "kabel + PoE"
         if parents[mac] is None:
-            link = "Gateway" if is_gateway(dev) else "ohne UniFi-Uplink"
+            link = ("Gateway" if is_gateway(dev) else
+                    "Kern (gegenseitiger Uplink)" if mac in in_cycle else "ohne UniFi-Uplink")
         nodes[mac] = Node(mac, dev_name(dev, mac), parents[mac], depth, link=link,
                           gateway=is_gateway(dev))
     for node in nodes.values():
