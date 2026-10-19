@@ -159,7 +159,7 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         fresh: dict[str, Any] = {}
         for name, res in zip(names, results, strict=True):
             if isinstance(res, UniFiAuthError):
-                raise ConfigEntryAuthFailed("API-Key abgelehnt") from res
+                raise ConfigEntryAuthFailed(f"API-Key abgelehnt ({res})") from res
             if isinstance(res, BaseException):
                 if not isinstance(res, UniFiApiError):
                     raise res
@@ -211,12 +211,16 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
             return_exceptions=True,
         )
         out: dict[str, dict[str, dict]] = {}
+        # Nur wenn ALLES abgelehnt wird, ist der Key ungültig. Einzelne 401/403 heißen
+        # „diese Rolle/Controller-Version darf das nicht“ – kein Grund für eine Neuanmeldung.
+        if results and all(isinstance(r, UniFiAuthError) for r in results):
+            raise ConfigEntryAuthFailed(f"API-Key abgelehnt ({results[0]})") from results[0]
         for key, res in zip([*keys, *official], results, strict=True):
-            if isinstance(res, UniFiAuthError):
-                raise ConfigEntryAuthFailed("API-Key abgelehnt") from res
             if isinstance(res, BaseException):
                 if key not in self._failed:
-                    _LOGGER.warning("Dataset %s nicht verfügbar: %s", key, res)
+                    hint = (" – keine Berechtigung für diesen API-Key (Rolle prüfen)"
+                            if isinstance(res, UniFiAuthError) else "")
+                    _LOGGER.warning("Dataset %s nicht verfügbar: %s%s", key, res, hint)
                     self._failed.add(key)
                 out[key] = prev.get(key, {})
                 continue
