@@ -209,6 +209,7 @@ class FirmwareManager:
         self._cancel = False
         self._refresh_lock = asyncio.Lock()
         self._last_refresh = 0.0
+        self._area_cache: tuple[float, dict[str, str]] | None = None
         self.status: dict[str, str] = {}      # mac → wartet/läuft/fertig/fehler/abgebrochen
         self.results: list[dict[str, Any]] = []
         self.started: float | None = None
@@ -264,17 +265,31 @@ class FirmwareManager:
             return hits[0]
         raise FirmwareError(f"Gerät „{ident}“ nicht gefunden")
 
+    def _areas(self) -> dict[str, str]:
+        """MAC → Name des HA-Bereichs (kurz zwischengespeichert, ein Registry-Durchlauf)."""
+        now = time.monotonic()
+        if self._area_cache is not None and now - self._area_cache[0] < 30:
+            return self._area_cache[1]
+        out: dict[str, str] = {}
+        prefix = f"{self.c.config_entry.entry_id}_"
+        try:
+            areas = ar.async_get(self.c.hass)
+            for entry in dr.async_entries_for_config_entry(
+                    dr.async_get(self.c.hass), self.c.config_entry.entry_id):
+                if not entry.area_id or not (area := areas.async_get_area(entry.area_id)):
+                    continue
+                for domain, ident in entry.identifiers:
+                    if domain == DOMAIN and ident.startswith(prefix):
+                        out[ident.removeprefix(prefix).lower()] = area.name
+        except Exception:  # noqa: BLE001 – Registry nicht verfügbar (Tests) → Namen
+            out = {}
+        self._area_cache = (now, out)
+        return out
+
     def room(self, mac: str, dev: dict | None = None) -> str:
         """Raum = HA-Bereich des Geräts; ohne Bereich aus dem Gerätenamen."""
-        hass = self.c.hass
-        try:
-            entry = dr.async_get(hass).async_get_device(
-                identifiers={(DOMAIN, f"{self.c.config_entry.entry_id}_{_mac(mac)}")})
-            if entry and entry.area_id and (area := ar.async_get(hass).async_get_area(
-                    entry.area_id)):
-                return area.name
-        except Exception:  # noqa: BLE001 – Registry nicht verfügbar (Tests) → Name
-            pass
+        if name := self._areas().get(_mac(mac) or ""):
+            return name
         return location(dev if dev is not None else self.devices.get(_mac(mac)) or {},
                         self.site_pattern)
 
