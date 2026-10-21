@@ -1,7 +1,7 @@
 # Offizielle UniFi Network API
 
 Ab Network 9 hat UniFi eine offizielle, dokumentierte API (`/proxy/network/integration/v1`).
-Geprüft gegen **UniFi Network API 11.0.89**. Die Integration nutzt sie zusätzlich zur internen
+Geprüft gegen **UniFi Network API 11.0.94** (vorher 11.0.89: gleiche 72 Endpunkte, gleiche Geräte-/Port-/Client-Aktionen, alle genutzten Felder unverändert). Die Integration nutzt sie zusätzlich zur internen
 Legacy-/v2-API, und zwar dort, wo sie mehr kann. Ohne diese API (ältere Controller) läuft alles
 wie bisher weiter.
 
@@ -55,7 +55,7 @@ Kinderprofil-Netze (das offizielle Anlage-Schema für Gateway-Netze ist nicht do
 
 ## Was intern bleiben muss
 
-Für folgende Bereiche hat die offizielle API (11.0.89) keine Endpunkte: Traffic-Regeln und
+Für folgende Bereiche hat die offizielle API (11.0.94) keine Endpunkte: Traffic-Regeln und
 -Routen (App-Sperren), Portweiterleitungen, statische Routen, QoS, Port-Profile, bekannte
 Clients (Netz-Zuordnung, Sperren), WireGuard-Zugänge, System-Log, Flows, Speedtest, Backups,
 LED/Locate und die Live-Statistik (Signal, AP, Temperaturen, Portfehler, Durchsatz).
