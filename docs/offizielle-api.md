@@ -44,7 +44,13 @@ Seiten geladen.
 | 2b | Netze und WLANs schreiben: Netz-, Internet- und VPN-freie LAN-Schalter, WLAN-Schalter, `set_wlan` (aktiv, versteckt, Client-Isolation) über `networks` bzw. `wifi/broadcasts`; Zuordnung über die `external_id` | **umgestellt** |
 | 3 | Geräte- und Client-Aktionen: Neustart (Button/`restart_device`), PoE-Port (Button/`power_cycle_port`), Gast freigeben/sperren (`authorize_guest` neu mit Datenlimit und Bandbreite, `unauthorize_guest`) über `devices/{id}/actions`, `…/ports/{idx}/actions`, `clients/{id}/actions` | **umgestellt** |
 
-Gelesen werden Netze und WLANs weiter intern: Subnetze, DHCP-Details, WAN- und VPN-Netze,
+Ab 11.0.94 liefert das offizielle Netz-Detail auch `ipv4Configuration` (Gateway-IP, Präfix,
+DHCP-Modus, -Bereich, Lease-Zeit, Domain) und `cellularBackupEnabled`. Die Integration liest das
+für Gateway-Netze alle 15 min (max. 4 Abrufe parallel), ergänzt damit fehlende interne Felder und
+zeigt DHCP-Modus, Lease-Zeit, Auto-Scale, Ping-Konfliktprüfung und Mobilfunk-Backup als Attribute
+am Netz-Sensor.
+
+Gelesen werden Netze und WLANs sonst weiter intern: WAN- und VPN-Netze,
 WLAN-Passwörter und die Netz-IDs, auf die sich die Clients beziehen, liefert nur die interne API.
 Geschrieben wird offiziell, sobald alle geänderten Felder dort ein Gegenstück haben
 (`enabled`, `name`, `vlanId`, `internetAccessEnabled`, `isolationEnabled`,

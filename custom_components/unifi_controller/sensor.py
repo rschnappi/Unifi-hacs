@@ -326,10 +326,15 @@ class NetworkClientsSensor(ControllerEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         net = self._net or {}
         keep = ("purpose", "vlan", "vlan_enabled", "ip_subnet", "enabled", "dhcpd_enabled",
-                "dhcpd_start", "dhcpd_stop", "internet_access_enabled",
-                "network_isolation_enabled", "vpn_type", "local_port", "id")
+                "dhcpd_start", "dhcpd_stop", "dhcpd_leasetime", "domain_name",
+                "internet_access_enabled", "network_isolation_enabled", "vpn_type",
+                "local_port", "id")
         attrs = scalar_attrs(net)
-        return {k: attrs[k] for k in keep if k in attrs}
+        out = {k: attrs[k] for k in keep if k in attrs}
+        for k, v in (net.get("official_ipv4") or {}).items():
+            if v is not None:
+                out[k] = v
+        return out
 
 
 class BanSensor(ControllerEntity, SensorEntity):
