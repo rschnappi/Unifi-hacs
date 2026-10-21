@@ -70,6 +70,34 @@ def _index(items: list[dict] | None, key: str) -> dict[str, dict]:
     return out
 
 
+IPV4_INTERVAL = 900   # s
+
+
+def merge_ipv4(net: dict, official: dict) -> None:
+    """Offizielle IPv4-/DHCP-Angaben ins interne Netz übernehmen (fehlende Felder ergänzen)."""
+    v4 = official.get("ipv4Configuration") or {}
+    dhcp = v4.get("dhcpConfiguration") or {}
+    rng = dhcp.get("ipAddressRange") or {}
+    derived = {
+        "ip_subnet": (f"{v4['hostIpAddress']}/{v4['prefixLength']}"
+                      if v4.get("hostIpAddress") and v4.get("prefixLength") else None),
+        "dhcpd_enabled": (dhcp.get("mode") == "SERVER") if dhcp.get("mode") else None,
+        "dhcpd_start": rng.get("start"),
+        "dhcpd_stop": rng.get("stop"),
+        "dhcpd_leasetime": dhcp.get("leaseTimeSeconds"),
+        "domain_name": dhcp.get("domainName"),
+    }
+    for key, val in derived.items():
+        if val is not None and net.get(key) in (None, ""):
+            net[key] = val
+    net["official_ipv4"] = {
+        "dhcp_mode": dhcp.get("mode"),
+        "auto_scale": v4.get("autoScaleEnabled"),
+        "cellular_backup": official.get("cellularBackupEnabled"),
+        "ping_conflict_detection": dhcp.get("pingConflictDetectionEnabled"),
+    }
+
+
 def _link_zones(out: dict[str, dict[str, dict]]) -> None:
     """Offizielle Zonen mit den internen Zonen-IDs verknüpfen (interne Netze kennen nur diese)."""
     by_ext = {z.get("external_id"): z for z in out.get("legacy_zones", {}).values()}
@@ -124,6 +152,8 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         self._last_config = 0.0
         self._force_config = True
         self._failed: set[str] = set()
+        self._ipv4: dict[str, dict] = {}
+        self._ipv4_at = 0.0
         self._fast_fail: dict[str, int] = {}
         self.logs: Any = None  # LogManager, wird in __init__.py gesetzt
         self.vpn_endpoint: str = (entry.options.get(CONF_VPN_ENDPOINT) or "").strip()
@@ -231,7 +261,41 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
                 out[key] = _index(res, "_id")
         _link_zones(out)
         await self._fetch_extras(out, prev)
+        await self._fetch_ipv4(out)
         return out
+
+    async def _fetch_ipv4(self, out: dict[str, dict[str, dict]]) -> None:
+        """IPv4/DHCP der Gateway-Netze aus der offiziellen API (ab Network 11.0.94).
+
+        Die Liste liefert sie nicht, nur das Detail – deshalb höchstens alle 15 min und
+        mit max. 4 parallelen Abrufen. Interne Werte bleiben maßgeblich; fehlen sie,
+        werden sie aus der offiziellen Antwort ergänzt.
+        """
+        nets = out.get("networks", {})
+        now = time.monotonic()
+        if now - self._ipv4_at >= IPV4_INTERVAL or not self._ipv4:
+            ext = [n["external_id"] for n in nets.values()
+                   if n.get("external_id") and n.get("purpose") in ("corporate", "guest")]
+            sem = asyncio.Semaphore(4)
+
+            async def one(eid: str) -> Any:
+                async with sem:
+                    return await self.client.integration("GET", f"{HYBRID['networks']}/{eid}")
+
+            results = await asyncio.gather(*(one(e) for e in ext), return_exceptions=True)
+            fresh: dict[str, dict] = {}
+            for eid, res in zip(ext, results, strict=True):
+                if isinstance(res, dict) and res.get("management") == "GATEWAY":
+                    fresh[eid] = res
+                elif isinstance(res, UniFiApiError) and "ipv4" not in self._failed:
+                    _LOGGER.debug("IPv4-Details offiziell nicht lesbar: %s", res)
+                    self._failed.add("ipv4")
+            if fresh or not ext:
+                self._ipv4 = fresh
+            self._ipv4_at = now
+        for net in nets.values():
+            if (off := self._ipv4.get(net.get("external_id") or "")) is not None:
+                merge_ipv4(net, off)
 
     async def _fetch_extras(self, out: dict[str, dict[str, dict]],
                             prev: dict[str, dict[str, dict]]) -> None:
