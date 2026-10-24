@@ -127,7 +127,8 @@ async def async_create_network(coordinator: UniFiCoordinator, name: str) -> str:
         "dhcpd_enabled": True, "dhcpd_start": f"{base}.20", "dhcpd_stop": f"{base}.250",
         "firewall_zone_id": legacy_zone_id(data, zone) or zone,
         "internet_access_enabled": True, "mdns_enabled": True,
-        "network_isolation_enabled": True, "setting_preference": "manual",
+        "network_isolation_enabled": True, "lte_lan_enabled": True,
+        "setting_preference": "manual",
         "ipv6_setting_preference": "manual", "enabled": True,
     }
     res = await coordinator.async_command(
