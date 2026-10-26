@@ -601,7 +601,8 @@ class SiteToSiteSubentryFlow(ConfigSubentryFlow):
         if user_input is not None:
             try:
                 report = await async_run(c, cfg, apply=user_input["apply"],
-                                         backup=user_input["backup"])
+                                         backup=user_input["backup"],
+                                         rename=user_input.get("rename", False))
                 await async_publish(c, cfg, report)
             except S2SError as err:
                 errors["base"] = "s2s_failed"
@@ -619,7 +620,7 @@ class SiteToSiteSubentryFlow(ConfigSubentryFlow):
                         data=data)
                 return self.async_create_entry(title=title, data=data)
         try:
-            preview = (await async_run(c, cfg, apply=False)).markdown()
+            preview = (await async_run(c, cfg, apply=False, rename=True)).markdown()
         except (S2SError, UniFiApiError) as err:
             preview = f"⛔ {err}"
             errors.setdefault("base", "s2s_blocked")
@@ -628,6 +629,7 @@ class SiteToSiteSubentryFlow(ConfigSubentryFlow):
         schema = vol.Schema({
             vol.Required("apply", default=True): bool,
             vol.Required("backup", default=True): bool,
+            vol.Required("rename", default=False): bool,
         })
         return self.async_show_form(step_id="confirm", data_schema=schema, errors=errors,
                                     description_placeholders={"plan": preview})

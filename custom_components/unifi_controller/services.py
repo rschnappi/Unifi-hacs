@@ -585,14 +585,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
 
         c = _coordinator(hass, call)
         raw = {k: v for k, v in call.data.items()
-               if k not in ("config_entry_id", "apply", "backup", "notify")}
+               if k not in ("config_entry_id", "apply", "backup", "notify", "rename")}
         if errors := validate_input(raw):
             raise ServiceValidationError(
                 "Ungültig: " + ", ".join(f"{k} ({v})" for k, v in errors.items()))
         cfg = S2SConfig.from_dict(normalize(raw))
         try:
             report = await async_run(c, cfg, apply=call.data.get("apply", False),
-                                     backup=call.data.get("backup", True))
+                                     backup=call.data.get("backup", True),
+                                     rename=call.data.get("rename", False))
         except (S2SError, UniFiApiError) as err:
             raise HomeAssistantError(str(err)) from err
         return await async_publish(c, cfg, report, notify=call.data.get("notify", True))
@@ -620,6 +621,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         vol.Optional("tunnel_name"): cv.string,
         vol.Optional("apply", default=False): cv.boolean,
         vol.Optional("backup", default=True): cv.boolean,
+        vol.Optional("rename", default=False): cv.boolean,
         vol.Optional("notify", default=True): cv.boolean,
     }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "site_to_site_document", site_to_site_document, schema=vol.Schema({

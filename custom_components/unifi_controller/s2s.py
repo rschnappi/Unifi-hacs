@@ -191,17 +191,25 @@ class Report:
     def info(self, t: str) -> None:
         self.steps.append(("info", t))
 
+    def ren(self, t: str) -> None:
+        self.steps.append(("ren" if self.apply else "plan_ren", t))
+
     def warn(self, t: str) -> None:
         self.steps.append(("warn", t))
         self.warnings.append(t)
 
     def markdown(self) -> str:
-        icon = {"ok": "✅", "neu": "🆕", "plan": "➕", "warn": "⚠️", "info": "ℹ️"}
+        icon = {"ok": "✅", "neu": "🆕", "plan": "➕", "warn": "⚠️", "info": "ℹ️",
+                "ren": "✏️", "plan_ren": "✏️"}
         return "\n".join(f"{icon[s]} {t}" for s, t in self.steps)
 
     @property
     def created(self) -> list[str]:
         return [t for s, t in self.steps if s in ("neu", "plan")]
+
+    @property
+    def renamed(self) -> list[str]:
+        return [t for s, t in self.steps if s in ("ren", "plan_ren")]
 
 
 # ---------------------------------------------------------------------- Hilfen
@@ -303,8 +311,12 @@ def _same_policy(p: dict, d: dict) -> bool:
 
 # ---------------------------------------------------------------------- Ablauf
 async def async_run(coordinator: UniFiCoordinator, cfg: S2SConfig, apply: bool,
-                    backup: bool = True) -> Report:
-    """apply=False → nur prüfen und planen (Dry-Run)."""
+                    backup: bool = True, rename: bool = False) -> Report:
+    """apply=False → nur prüfen und planen (Dry-Run).
+
+    rename=True → vorhandene, am Inhalt erkannte Objekte bekommen die neuen Namen
+    (das Einzige, was an Vorhandenem geändert wird).
+    """
     r = Report(apply=apply)
     hass = coordinator.hass
     client = coordinator.client
@@ -394,11 +406,32 @@ async def async_run(coordinator: UniFiCoordinator, cfg: S2SConfig, apply: bool,
         except UniFiApiError as err:
             raise S2SError(f"{label}: {err}") from err
 
+    async def same_or_rename(what: str, old: str, new: str, coro_factory) -> None:
+        """Vorhandenes Objekt: Name gleich → ok, sonst umbenennen (Option) oder Hinweis."""
+        if (old or "") == new:
+            r.ok(f"{what} „{new}“ vorhanden – unverändert")
+            return
+        if not rename:
+            r.ok(f"{what} „{old}“ vorhanden (gleicher Inhalt) – unverändert; "
+                 f"Umbenennen in „{new}“ möglich")
+            return
+        r.ren(f"{what} „{old}“ → „{new}“")
+        if apply:
+            try:
+                await coro_factory()
+            except UniFiApiError as err:
+                r.warn(f"{what} „{old}“ nicht umbenannt: {err}")
+
     # ---------------------------------------------------------------- 1. Adressliste
-    grp = next((t for t in lists.values() if t.get("name") == cfg.group), None)
+    want_items = set(cfg.remote_nets)
+    grp = next((t for t in lists.values() if t.get("name") == cfg.group), None) or next(
+        (t for t in lists.values() if t.get("type") == "IPV4_ADDRESSES"
+         and {i.get("value") for i in t.get("items", [])} == want_items), None)
     if grp:
         have = {i.get("value") for i in grp.get("items", [])}
-        r.ok(f"Adressliste „{cfg.group}“ vorhanden – unverändert")
+        await same_or_rename("Adressliste", grp.get("name"), cfg.group,
+                             lambda: coordinator.async_update_object(
+                                 "firewall_groups", grp, {"name": cfg.group}, refresh=False))
         if miss := [n for n in cfg.remote_nets if n not in have]:
             r.warn(f"In „{cfg.group}“ fehlen: {', '.join(miss)} – bei Bedarf ergänzen")
         grp_id = grp["id"]
@@ -467,9 +500,14 @@ async def async_run(coordinator: UniFiCoordinator, cfg: S2SConfig, apply: bool,
     rad_id = None
     rad_secret = None
     if cfg.radius_servers:
-        rad = next((p for p in radius if p.get("name") == cfg.radius), None)
+        rad = next((p for p in radius if p.get("name") == cfg.radius), None) or next(
+            (p for p in radius if {s.get("ip") for s in p.get("auth_servers", [])}
+             == set(cfg.radius_servers)), None)
         if rad:
-            r.ok(f"RADIUS-Profil „{cfg.radius}“ vorhanden – unverändert")
+            await same_or_rename(
+                "RADIUS-Profil", rad.get("name"), cfg.radius,
+                lambda: client.update_object("rest/radiusprofile", rad["_id"],
+                                             {**rad, "name": cfg.radius}))
             have = {s.get("ip") for s in rad.get("auth_servers", [])}
             if miss := [ip for ip in cfg.radius_servers if ip not in have]:
                 r.warn(f"RADIUS-Profil: Server fehlen: {', '.join(miss)}")
@@ -495,13 +533,19 @@ async def async_run(coordinator: UniFiCoordinator, cfg: S2SConfig, apply: bool,
             rad_id = created.get("_id", "<neu>")
 
     # ---------------------------------------------------------------- 5. Tunnel
+    # am Namen oder an der Gegenstelle erkennen – UniFi erlaubt je Peer-IP nur einen Tunnel
     tun = next((n for n in nets.values()
-                if n.get("name") == cfg.tunnel and n.get("purpose") == "site-vpn"), None)
+                if n.get("name") == cfg.tunnel and n.get("purpose") == "site-vpn"), None) or next(
+        (n for n in nets.values()
+         if n.get("purpose") == "site-vpn" and n.get("ipsec_peer_ip") == peer_ip), None)
     if tun:
         transfer = tun.get("ipsec_tunnel_ip") or ""
         psk = tun.get("x_ipsec_pre_shared_key")
-        r.ok(f"Tunnel „{cfg.tunnel}“ vorhanden (Peer {tun.get('ipsec_peer_ip')}, "
-             f"VTI {transfer}, aktiv: {tun.get('enabled')}) – unverändert")
+        r.info(f"Tunnel: Peer {tun.get('ipsec_peer_ip')}, VTI {transfer}, "
+               f"aktiv: {tun.get('enabled')}")
+        await same_or_rename("Tunnel", tun.get("name"), cfg.tunnel,
+                             lambda: coordinator.async_update_object(
+                                 "networks", tun, {"name": cfg.tunnel}, refresh=False))
         if tun.get("ipsec_peer_ip") != peer_ip:
             r.warn(f"Tunnel-Peer {tun.get('ipsec_peer_ip')} ≠ aktuelle Auflösung von "
                    f"{cfg.peer_fqdn} ({peer_ip})")
@@ -561,7 +605,10 @@ async def async_run(coordinator: UniFiCoordinator, cfg: S2SConfig, apply: bool,
                    and x.get("matching_target") == target
                    and src in [t.get("network_id") for t in x.get("target_devices", [])]), None)
         if ex:
-            r.ok(f"Route „{ex.get('description')}“ vorhanden – unverändert")
+            await same_or_rename("Route", ex.get("description"), desc,
+                                 lambda ex=ex, desc=desc: client.request(
+                                     "PUT", f"v2/trafficroutes/{ex['_id']}",
+                                     {**ex, "description": desc}))
             if target == "IP":
                 have = {i.get("ip_or_subnet") for i in ex.get("ip_addresses", [])}
                 if miss := [i["ip_or_subnet"] for i in ips if i["ip_or_subnet"] not in have]:
@@ -608,7 +655,11 @@ async def async_run(coordinator: UniFiCoordinator, cfg: S2SConfig, apply: bool,
                             _side(zid), states=["NEW", "INVALID"], log=True))
     for d in defs:
         if ex := next((p for p in pols if _same_policy(p, d)), None):
-            r.ok(f"Regel „{ex.get('name')}“ vorhanden – unverändert")
+            await same_or_rename("Regel", ex.get("name"), d["name"],
+                                 lambda ex=ex, d=d: coordinator.async_update_object(
+                                     "firewall_policies", ex,
+                                     {"name": d["name"], "description": d["description"]},
+                                     refresh=False))
             continue
         await create(f"Regel „{d['name']}“", lambda d=d: client.integration("POST", POLICIES, d))
 
@@ -967,6 +1018,9 @@ async def async_publish(coordinator: UniFiCoordinator, cfg: S2SConfig, report: R
         if report.created:
             lines.append("\n**" + ("Angelegt" if report.apply else "Würde angelegt") + ":**")
             lines += [f"- {t}" for t in report.created]
+        if report.renamed:
+            lines.append("\n**" + ("Umbenannt" if report.apply else "Würde umbenannt") + ":**")
+            lines += [f"- {t}" for t in report.renamed]
         if report.warnings:
             lines.append("\n**Hinweise:**")
             lines += [f"- {t}" for t in report.warnings]
@@ -981,7 +1035,8 @@ async def async_publish(coordinator: UniFiCoordinator, cfg: S2SConfig, report: R
         pn.async_create(hass, "\n".join(lines), title=f"Site-to-Site {cfg.firma}",
                         notification_id=f"{DOMAIN}_s2s_{name}")
     return {"anleitung_html": url_html, "anleitung_md": url_md, "datei": md_path,
-            "angelegt": report.created, "hinweise": report.warnings,
+            "angelegt": report.created, "umbenannt": report.renamed,
+            "hinweise": report.warnings,
             "ablauf": [f"{s}: {t}" for s, t in report.steps]}
 
 
