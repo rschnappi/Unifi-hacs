@@ -42,6 +42,7 @@ Seiten geladen.
 | 1 | Firewall-Policies, Zonen, Adresslisten (Traffic Matching Lists): Schalter, Länder-Blocking, Fail2Ban-Liste, Sperren der Kinderprofile, Länderliste | **umgestellt** |
 | 2a | DNS-Einträge → DNS Policies (A, AAAA, CNAME, MX, TXT, SRV, Forward): Schalter je Eintrag, Dienste `set_dns_record` / `delete_dns_record` | **umgestellt** |
 | 2b | Netze und WLANs schreiben: Netz-, Internet- und VPN-freie LAN-Schalter, WLAN-Schalter, `set_wlan` (aktiv, versteckt, Client-Isolation) über `networks` bzw. `wifi/broadcasts`; Zuordnung über die `external_id` | **umgestellt** |
+| 2c | Netze inkl. Subnetz und DHCP schreiben: Dienst `set_network` und **Optionen → Netze (Subnetz & DHCP)** – Name, aktiv, VLAN, Internet, Isolation, mDNS, Mobilfunk-Backup, Gateway-IP/Präfix, DHCP-Bereich, Lease-Zeit, Domain, Ping-Konfliktprüfung. Prüft Bereich im Subnetz, Gateway außerhalb des Bereichs, Überschneidung mit anderen Netzen; Subnetz-Änderungen nur mit Bestätigung | **umgestellt** (ab 11.0.94) |
 | 3 | Geräte- und Client-Aktionen: Neustart (Button/`restart_device`), PoE-Port (Button/`power_cycle_port`), Gast freigeben/sperren (`authorize_guest` neu mit Datenlimit und Bandbreite, `unauthorize_guest`) über `devices/{id}/actions`, `…/ports/{idx}/actions`, `clients/{id}/actions` | **umgestellt** |
 
 Ab 11.0.94 liefert das offizielle Netz-Detail auch `ipv4Configuration` (Gateway-IP, Präfix,
