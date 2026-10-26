@@ -751,3 +751,73 @@ update_devices:
       default: false
       selector:
         boolean: {}
+set_network:
+  fields:
+    config_entry_id: *id001
+    network:
+      required: true
+      example: Florian
+      selector:
+        text: {}
+    name:
+      selector:
+        text: {}
+    enabled:
+      selector:
+        boolean: {}
+    vlan:
+      selector:
+        number:
+          min: 1
+          max: 4009
+          mode: box
+    internet_access:
+      selector:
+        boolean: {}
+    isolation:
+      selector:
+        boolean: {}
+    mdns:
+      selector:
+        boolean: {}
+    cellular_backup:
+      selector:
+        boolean: {}
+    gateway_ip:
+      example: 192.168.43.1
+      selector:
+        text: {}
+    prefix_length:
+      selector:
+        number:
+          min: 8
+          max: 30
+          mode: box
+    auto_scale:
+      selector:
+        boolean: {}
+    dhcp_start:
+      example: 192.168.43.6
+      selector:
+        text: {}
+    dhcp_stop:
+      example: 192.168.43.254
+      selector:
+        text: {}
+    lease_time:
+      selector:
+        number:
+          min: 60
+          max: 31536000
+          unit_of_measurement: s
+          mode: box
+    domain_name:
+      selector:
+        text: {}
+    ping_conflict_detection:
+      selector:
+        boolean: {}
+    confirm_subnet_change:
+      default: false
+      selector:
+        boolean: {}
