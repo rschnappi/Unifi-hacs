@@ -8,7 +8,7 @@
 #
 # Version: höchster Tag + Bump aus den Commit-Nachrichten seit dem letzten Tag
 #   „BREAKING“ oder „!:“  → major · „feat“ oder „[minor]“ → minor · sonst → patch
-#   „[skip release]“ in einer Commit-Nachricht oder nur Doku/Workflow geändert → kein Release.
+#   „[skip release]“ in ALLEN Commits seit dem letzten Tag oder nur Doku/Workflow geändert → kein Release.
 name: CI/CD
 
 on:
@@ -147,7 +147,9 @@ jobs:
           LAST=$(git tag -l 'v*' --sort=-v:refname | head -1)
           LAST=${LAST:-v0.0.0}
           LOG=$(git log --pretty='%s%n%b' "${LAST}..HEAD")
-          if echo "$LOG" | grep -q '\[skip release\]'; then echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # nur überspringen, wenn ALLE Commits seit dem letzten Tag „[skip release]“ tragen
+          PENDING=$(for c in $(git rev-list "${LAST}..HEAD"); do git log -1 --format='%B' "$c" | grep -q '\[skip release\]' || echo "$c"; done)
+          if [ -z "$PENDING" ]; then echo "Nur [skip release]-Commits seit ${LAST}"; echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
           if [ -z "$(git rev-list "${LAST}..HEAD")" ]; then echo "skip=1" >> "$GITHUB_OUTPUT"; exit 0; fi
           # nur Doku/Workflows geändert → mergen ja, Release nein
           if [ -z "$(git diff --name-only "${LAST}..HEAD" -- custom_components hacs.json)" ]; then
