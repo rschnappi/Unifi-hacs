@@ -821,3 +821,108 @@ set_network:
       default: false
       selector:
         boolean: {}
+site_to_site_document:
+  fields:
+    config_entry_id: *id001
+    tunnel:
+      required: true
+      example: MCL
+      selector:
+        text: {}
+    notify:
+      default: true
+      selector:
+        boolean: {}
+    include_markdown:
+      default: false
+      selector:
+        boolean: {}
+site_to_site:
+  fields:
+    config_entry_id: *id001
+    firma:
+      required: true
+      example: ACME
+      selector:
+        text: {}
+    peer_fqdn:
+      required: true
+      example: vpn.firma.example
+      selector:
+        text: {}
+    local_id:
+      required: true
+      example: home.example.net
+      selector:
+        text: {}
+    remote_nets:
+      required: true
+      example: 10.10.0.0/16, 10.20.0.0/24
+      selector:
+        text:
+          multiline: true
+    remote_dns:
+      required: true
+      example: 10.10.0.10, 10.10.0.11
+      selector:
+        text: {}
+    radius_servers:
+      example: 10.10.0.20, 10.10.0.21
+      selector:
+        text: {}
+    ssid:
+      selector:
+        text: {}
+    full_tunnel:
+      default: true
+      selector:
+        boolean: {}
+    allow_support:
+      default: true
+      selector:
+        boolean: {}
+    preferred_vlan:
+      selector:
+        number:
+          min: 2
+          max: 4009
+          mode: box
+    preferred_subnet:
+      example: 172.20.50.0/24
+      selector:
+        text: {}
+    subnet_pool:
+      example: 172.20.0.0/14
+      selector:
+        text: {}
+    transfer_pool:
+      example: 10.255.0.0/16
+      selector:
+        text: {}
+    group_name:
+      selector:
+        text: {}
+    zone_name:
+      selector:
+        text: {}
+    net_name:
+      selector:
+        text: {}
+    radius_name:
+      selector:
+        text: {}
+    tunnel_name:
+      selector:
+        text: {}
+    apply:
+      default: false
+      selector:
+        boolean: {}
+    backup:
+      default: true
+      selector:
+        boolean: {}
+    notify:
+      default: true
+      selector:
+        boolean: {}

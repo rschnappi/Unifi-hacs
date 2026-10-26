@@ -177,6 +177,12 @@ async def _validate(hass: HomeAssistant, data: Mapping[str, Any]) -> dict[str, A
         raise ValueError("cannot_connect") from err
 
 
+def dt_now_iso() -> str:
+    from homeassistant.util import dt as dt_util  # noqa: PLC0415
+
+    return dt_util.now().isoformat(timespec="seconds")
+
+
 class UniFiControllerConfigFlow(ConfigFlow, domain=DOMAIN):
     VERSION = 1
 
@@ -255,7 +261,10 @@ class UniFiControllerConfigFlow(ConfigFlow, domain=DOMAIN):
     def async_get_supported_subentry_types(
         cls, config_entry: ConfigEntry
     ) -> dict[str, type[ConfigSubentryFlow]]:
-        return {SUBENTRY_KID: KidSubentryFlow, SUBENTRY_PERSON: PersonSubentryFlow}
+        from .s2s import SUBENTRY_S2S  # noqa: PLC0415
+
+        return {SUBENTRY_KID: KidSubentryFlow, SUBENTRY_PERSON: PersonSubentryFlow,
+                SUBENTRY_S2S: SiteToSiteSubentryFlow}
 
 
 NEW_NETWORK = "__new__"
@@ -464,6 +473,164 @@ class PersonSubentryFlow(ConfigSubentryFlow):
         return self.async_show_form(
             step_id="reconfigure", data_schema=self._schema(user_input or dict(sub.data)),
             errors=errors)
+
+
+class SiteToSiteSubentryFlow(ConfigSubentryFlow):
+    """Assistent: Site-to-Site-Tunnel zu einer Firmen-Firewall (Sophos XGS, XFRM).
+
+    1. Gegenstelle und Firmennetze · 2. Heimseite (VLAN/Subnetze) · 3. Vorschau (Dry-Run) und
+    Anlegen in UniFi + Anleitung für die Sophos.
+    """
+
+    def __init__(self) -> None:
+        self._data: dict[str, Any] = {}
+        self._reconf = False
+
+    def _coordinator(self):
+        return getattr(self._get_entry(), "runtime_data", None)
+
+    def _step1_schema(self, d: dict[str, Any]) -> vol.Schema:
+        from homeassistant.helpers.selector import (  # noqa: PLC0415
+            TextSelector,
+            TextSelectorConfig,
+        )
+
+        multi = TextSelector(TextSelectorConfig(multiline=True))
+        c = self._coordinator()
+
+        def txt(key: str) -> str:
+            v = d.get(key)
+            return ", ".join(v) if isinstance(v, list) else (v or "")
+        return vol.Schema({
+            vol.Required("firma", default=d.get("firma", "Firma")): str,
+            vol.Required("peer_fqdn", default=d.get("peer_fqdn", "")): str,
+            vol.Required("local_id", default=d.get("local_id") or (
+                c.vpn_endpoint if c else "") or ""): str,
+            vol.Required("remote_nets", default=txt("remote_nets")): multi,
+            vol.Required("remote_dns", default=txt("remote_dns")): str,
+            vol.Optional("radius_servers", description={"suggested_value": txt("radius_servers")}):
+                str,
+            vol.Optional("ssid", description={"suggested_value": d.get("ssid") or ""}): str,
+            vol.Required("full_tunnel", default=d.get("full_tunnel", True)): bool,
+            vol.Required("allow_support", default=d.get("allow_support", True)): bool,
+        })
+
+    @staticmethod
+    def _step2_schema(d: dict[str, Any]) -> vol.Schema:
+        from .s2s import DEFAULTS  # noqa: PLC0415
+
+        g = DEFAULTS | {k: v for k, v in d.items() if v not in (None, "")}
+        return vol.Schema({
+            vol.Required("preferred_vlan", default=int(g["preferred_vlan"])):
+                vol.All(vol.Coerce(int), vol.Range(min=2, max=4009)),
+            vol.Required("preferred_subnet", default=g["preferred_subnet"]): str,
+            vol.Required("subnet_pool", default=g["subnet_pool"]): str,
+            vol.Required("transfer_pool", default=g["transfer_pool"]): str,
+            **{vol.Optional(k, description={"suggested_value": g.get(k) or ""}): str
+               for k in ("group_name", "zone_name", "net_name", "radius_name", "tunnel_name")},
+        })
+
+    async def _start(self, data: dict[str, Any]) -> SubentryFlowResult:
+        c = self._coordinator()
+        if c is None or c.data is None:
+            return self.async_abort(reason="not_loaded")
+        self._data = dict(data)
+        return await self._step1(None)
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        return await self._start({})
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        self._reconf = True
+        return await self._start(dict(self._get_reconfigure_subentry().data))
+
+    async def _step1(self, user_input: dict[str, Any] | None) -> SubentryFlowResult:
+        return await self.async_step_tunnel(user_input)
+
+    async def async_step_tunnel(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        from .s2s import SUBENTRY_S2S, normalize, validate_input  # noqa: PLC0415
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            user_input.setdefault("radius_servers", "")
+            user_input.setdefault("ssid", "")
+            errors = validate_input(user_input)
+            firma = user_input.get("firma", "").strip().lower()
+            other = {s.data.get("firma", "").lower() for sid, s in
+                     self._get_entry().subentries.items() if s.subentry_type == SUBENTRY_S2S
+                     and not (self._reconf and sid == self._get_reconfigure_subentry().subentry_id)}
+            if firma in other:
+                errors["firma"] = "s2s_exists"
+            if not errors:
+                self._data |= normalize(user_input)
+                if self._data.get("radius_servers") and not self._data.get("ssid"):
+                    self._data["ssid"] = None
+                return await self.async_step_home()
+        return self.async_show_form(
+            step_id="tunnel", data_schema=self._step1_schema(user_input or self._data),
+            errors=errors)
+
+    async def async_step_home(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        from .s2s import validate_input  # noqa: PLC0415
+
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            errors = {k: v for k, v in validate_input({**self._data, **user_input}).items()
+                      if k in user_input}
+            if not errors:
+                for k in ("group_name", "zone_name", "net_name", "radius_name", "tunnel_name"):
+                    user_input[k] = (user_input.get(k) or "").strip()
+                self._data |= user_input
+                return await self.async_step_confirm()
+        return self.async_show_form(
+            step_id="home", data_schema=self._step2_schema(user_input or self._data),
+            errors=errors)
+
+    async def async_step_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> SubentryFlowResult:
+        from .s2s import S2SConfig, S2SError, async_publish, async_run  # noqa: PLC0415
+
+        c = self._coordinator()
+        cfg = S2SConfig.from_dict(self._data)
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                report = await async_run(c, cfg, apply=user_input["apply"],
+                                         backup=user_input["backup"])
+                await async_publish(c, cfg, report)
+            except S2SError as err:
+                errors["base"] = "s2s_failed"
+                self._error = str(err)
+            except UniFiApiError as err:
+                errors["base"] = "s2s_failed"
+                self._error = str(err)
+            else:
+                data = {**self._data, "last_run": dt_now_iso(),
+                        "applied": bool(user_input["apply"])}
+                title = f"{cfg.firma} → {cfg.peer_fqdn}"
+                if self._reconf:
+                    return self.async_update_and_abort(
+                        self._get_entry(), self._get_reconfigure_subentry(), title=title,
+                        data=data)
+                return self.async_create_entry(title=title, data=data)
+        try:
+            preview = (await async_run(c, cfg, apply=False)).markdown()
+        except (S2SError, UniFiApiError) as err:
+            preview = f"⛔ {err}"
+            errors.setdefault("base", "s2s_blocked")
+        if errors.get("base") == "s2s_failed":
+            preview = f"⛔ {getattr(self, '_error', '')}\n\n{preview}"
+        schema = vol.Schema({
+            vol.Required("apply", default=True): bool,
+            vol.Required("backup", default=True): bool,
+        })
+        return self.async_show_form(step_id="confirm", data_schema=schema, errors=errors,
+                                    description_placeholders={"plan": preview})
 
 
 class UniFiControllerOptionsFlow(OptionsFlow):

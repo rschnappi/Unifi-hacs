@@ -27,6 +27,9 @@ _LOGGER = logging.getLogger(__name__)
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     async_setup_services(hass)
+    from .s2s import register_view  # noqa: PLC0415
+
+    register_view(hass)
     return True
 
 
