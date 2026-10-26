@@ -1024,9 +1024,13 @@ async def async_publish(coordinator: UniFiCoordinator, cfg: S2SConfig, report: R
         if report.warnings:
             lines.append("\n**Hinweise:**")
             lines += [f"- {t}" for t in report.warnings]
-        lines.append(f"\n**Anleitung für die Sophos:** [HTML (druckbar)]({url_html}) · "
-                     f"[Markdown]({url_md}) – Links 24 h gültig, neu erzeugen mit "
-                     "`unifi_controller.site_to_site_document`. Datei: `" + md_path + "`")
+        base = _base_url(hass)
+        # target=_blank: sonst fängt der HA-Router den Link ab und springt zur Startseite
+        lines.append(
+            f'\n**Anleitung für die Sophos:** <a href="{base}{url_html}" target="_blank">'
+            f'HTML (druckbar)</a> · <a href="{base}{url_md}" target="_blank">Markdown</a> – '
+            "Links 24 h gültig. Die komplette Anleitung steht außerdem in der Benachrichtigung "
+            f"„Sophos-Anleitung {cfg.firma}“. Datei: `{md_path}`")
         if report.secrets:
             lines.append("\n⚠️ Die Anleitung enthält PSK/Shared Secret – nach dem Einrichten löschen "
                          "oder sicher ablegen.")
@@ -1034,10 +1038,24 @@ async def async_publish(coordinator: UniFiCoordinator, cfg: S2SConfig, report: R
                      "3. WLAN aktivieren")
         pn.async_create(hass, "\n".join(lines), title=f"Site-to-Site {cfg.firma}",
                         notification_id=f"{DOMAIN}_s2s_{name}")
+        # komplette Anleitung direkt in HA lesbar (ohne Download)
+        pn.async_create(hass, md.split("\n", 2)[2] if md.count("\n") > 2 else md,
+                        title=f"Sophos-Anleitung {cfg.firma}",
+                        notification_id=f"{DOMAIN}_s2s_guide_{name}")
     return {"anleitung_html": url_html, "anleitung_md": url_md, "datei": md_path,
             "angelegt": report.created, "umbenannt": report.renamed,
             "hinweise": report.warnings,
             "ablauf": [f"{s}: {t}" for s, t in report.steps]}
+
+
+def _base_url(hass) -> str:
+    """Absolute Adresse von HA (extern bevorzugt), damit Links außerhalb der App öffnen."""
+    from homeassistant.helpers.network import NoURLAvailableError, get_url  # noqa: PLC0415
+
+    try:
+        return get_url(hass, prefer_external=True, allow_cloud=False)
+    except NoURLAvailableError:
+        return ""
 
 
 def register_view(hass) -> None:
