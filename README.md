@@ -402,7 +402,7 @@ neu, während ein Gerät dahinter noch lädt oder flasht, bricht dessen Update a
   die anderen bei einem Fehler zu retten (bei 3 Switches also höchstens 2 gleichzeitig). Das Gateway
   läuft immer allein. Standard: alles einzeln
 - Raum = Home-Assistant-Bereich des Geräts; ohne Bereich der Teil des Gerätenamens vor dem ersten „-“
-  (`IZW03-SWL-01` → `IZW03`), per Regex änderbar
+  (`B1-SW-01` → `B1`), per Regex änderbar
 - weiter erst, wenn das Gerät mit neuer Firmware zurück ist **und** alles dahinter wieder online ist
 - nach dem ersten Fehler starten keine weiteren Updates (laufende werden fertig); Ergebnis über die
   Benachrichtigungs-Kategorie *Updates*

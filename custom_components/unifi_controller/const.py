@@ -47,7 +47,7 @@ CONF_FW_SITE_PATTERN = "firmware_site_pattern"
 DEFAULT_FW_MAX_AP = 1
 DEFAULT_FW_MAX_SWITCH = 1
 DEFAULT_FW_MAX_SWITCH_SITE = 2
-DEFAULT_FW_SITE_PATTERN = r"^([^-]+)-"   # Standort = Teil vor dem ersten „-“ (IZW03-SWL-… → IZW03)
+DEFAULT_FW_SITE_PATTERN = r"^([^-]+)-"   # Standort = Teil vor dem ersten „-“ (B1-SW-… → B1)
 
 # Logs / Fail2Ban
 CONF_LOGS = "logs_enabled"
