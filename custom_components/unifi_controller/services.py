@@ -541,7 +541,93 @@ def async_setup_services(hass: HomeAssistant) -> None:
         except UniFiApiError as err:
             raise HomeAssistantError(f"Netz nicht geändert: {err}") from err
 
+    async def site_to_site_document(call: ServiceCall) -> ServiceResponse:
+        """Anleitung für die Gegenstelle neu erzeugen (liest PSK/Secret live aus UniFi)."""
+        from .s2s import (  # noqa: PLC0415
+            SUBENTRY_S2S,
+            S2SConfig,
+            S2SError,
+            async_publish,
+            async_run,
+        )
+
+        c = _coordinator(hass, call)
+        key = call.data["tunnel"].strip().lower()
+        subs = [s for s in c.config_entry.subentries.values() if s.subentry_type == SUBENTRY_S2S]
+        sub = next((s for s in subs if key in (s.title.lower(), str(s.data.get("firma", "")).lower(),
+                                                s.subentry_id)), None)
+        if sub is None:
+            raise ServiceValidationError(
+                f"Tunnel „{call.data['tunnel']}“ nicht gefunden – vorhanden: "
+                + (", ".join(s.title for s in subs) or "keiner"))
+        cfg = S2SConfig.from_dict(dict(sub.data))
+        try:
+            report = await async_run(c, cfg, apply=False)
+        except (S2SError, UniFiApiError) as err:
+            raise HomeAssistantError(str(err)) from err
+        res = await async_publish(c, cfg, report, notify=call.data.get("notify", True))
+        if call.data.get("include_markdown"):
+            from .s2s import guide_markdown  # noqa: PLC0415
+
+            res["markdown"] = guide_markdown(report.values, report)
+        return res
+
+    async def site_to_site(call: ServiceCall) -> ServiceResponse:
+        """Site-to-Site prüfen (apply: false) oder einrichten – wie der Assistent."""
+        from .s2s import (  # noqa: PLC0415
+            S2SConfig,
+            S2SError,
+            async_publish,
+            async_run,
+            normalize,
+            validate_input,
+        )
+
+        c = _coordinator(hass, call)
+        raw = {k: v for k, v in call.data.items()
+               if k not in ("config_entry_id", "apply", "backup", "notify")}
+        if errors := validate_input(raw):
+            raise ServiceValidationError(
+                "Ungültig: " + ", ".join(f"{k} ({v})" for k, v in errors.items()))
+        cfg = S2SConfig.from_dict(normalize(raw))
+        try:
+            report = await async_run(c, cfg, apply=call.data.get("apply", False),
+                                     backup=call.data.get("backup", True))
+        except (S2SError, UniFiApiError) as err:
+            raise HomeAssistantError(str(err)) from err
+        return await async_publish(c, cfg, report, notify=call.data.get("notify", True))
+
     reg = hass.services.async_register
+    reg(DOMAIN, "site_to_site", site_to_site, schema=vol.Schema({
+        **BASE,
+        vol.Required("firma"): cv.string,
+        vol.Required("peer_fqdn"): cv.string,
+        vol.Required("local_id"): cv.string,
+        vol.Required("remote_nets"): vol.Any(cv.string, [cv.string]),
+        vol.Required("remote_dns"): vol.Any(cv.string, [cv.string]),
+        vol.Optional("radius_servers"): vol.Any(cv.string, [cv.string]),
+        vol.Optional("ssid"): cv.string,
+        vol.Optional("full_tunnel", default=True): cv.boolean,
+        vol.Optional("allow_support", default=True): cv.boolean,
+        vol.Optional("preferred_vlan"): vol.All(vol.Coerce(int), vol.Range(min=2, max=4009)),
+        vol.Optional("preferred_subnet"): cv.string,
+        vol.Optional("subnet_pool"): cv.string,
+        vol.Optional("transfer_pool"): cv.string,
+        vol.Optional("group_name"): cv.string,
+        vol.Optional("zone_name"): cv.string,
+        vol.Optional("net_name"): cv.string,
+        vol.Optional("radius_name"): cv.string,
+        vol.Optional("tunnel_name"): cv.string,
+        vol.Optional("apply", default=False): cv.boolean,
+        vol.Optional("backup", default=True): cv.boolean,
+        vol.Optional("notify", default=True): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "site_to_site_document", site_to_site_document, schema=vol.Schema({
+        **BASE,
+        vol.Required("tunnel"): cv.string,
+        vol.Optional("notify", default=True): cv.boolean,
+        vol.Optional("include_markdown", default=False): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "set_network", set_network, schema=vol.Schema({
         **BASE,
         vol.Required("network"): cv.string,

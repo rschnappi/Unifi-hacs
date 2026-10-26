@@ -372,6 +372,24 @@ data: {network: Benjamin, app: TikTok, blocked: true}
 | `button.netz_unifi_controller_backup_erstellen` | Backup erzeugen, herunterladen, unter `/config/unifi_controller_backups/` ablegen (letzte 10) |
 | `sensor.netz_unifi_letztes_controller_backup` | letztes automatisches Backup des Controllers |
 
+### Site-to-Site-Tunnel (Sophos XGS u. a.)
+
+*Einstellungen → Geräte & Dienste → UniFi Controller Manager → ⋮ → **Site-to-Site-Tunnel einrichten***
+
+Der Assistent fragt Gegenstelle, Firmennetze, DNS, RADIUS/WLAN und die Heimseite (VLAN, Subnetze)
+ab, zeigt eine **Vorschau** (was vorhanden ist, was angelegt würde, Stolpersteine S1–S11) und
+
+- **A** legt auf Wunsch die UniFi-Seite an: Adressliste, Zone, Netz mit Firmen-DNS, RADIUS-Profil,
+  IPsec-Tunnel (IKEv2/VTI, deaktiviert), Policy-Based Routes mit Kill-Switch, Firewall-Regeln
+  (strikte Trennung vom Heimnetz) und WLAN mit Firmen-RADIUS (deaktiviert). Vorher Controller-Backup.
+  Vorhandenes wird nie verändert.
+- **B** erzeugt die **Anleitung für die Sophos** mit allen Werten (PSK, Transfernetz/XFRM, Routen,
+  Regeln, NAT, NPS) als druckbares HTML und Markdown – Download-Link in der HA-Benachrichtigung,
+  Datei unter `/config/unifi_controller/site_to_site/`.
+
+Dienste: `unifi_controller.site_to_site` (prüfen/einrichten per Automation) und
+`unifi_controller.site_to_site_document` (Anleitung neu erzeugen, liest PSK/Secret live aus UniFi).
+
 ### Firmware in Topologie-Reihenfolge
 
 Ein Gerät bekommt Netz und oft auch Strom (PoE) über sein Uplink-Gerät. Startet der Uplink
