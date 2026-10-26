@@ -926,3 +926,7 @@ site_to_site:
       default: true
       selector:
         boolean: {}
+    rename:
+      default: false
+      selector:
+        boolean: {}
