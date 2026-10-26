@@ -467,9 +467,11 @@ class PersonSubentryFlow(ConfigSubentryFlow):
 
 
 class UniFiControllerOptionsFlow(OptionsFlow):
+    _net_id: str = ""
+
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
-            step_id="init", menu_options=["general", "logs", "region", "notify", "firmware"])
+            step_id="init", menu_options=["general", "networks", "logs", "region", "notify", "firmware"])
 
     async def async_step_notify(
         self, user_input: dict[str, Any] | None = None
@@ -529,6 +531,90 @@ class UniFiControllerOptionsFlow(OptionsFlow):
                          default=o.get(CONF_FW_SITE_PATTERN, DEFAULT_FW_SITE_PATTERN)): str,
         })
         return self.async_show_form(step_id="firmware", data_schema=schema, errors=errors)
+
+    async def async_step_networks(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Netze: zuerst das Netz wählen."""
+        from .netconfig import gateway_networks  # noqa: PLC0415
+
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        nets = gateway_networks(coordinator) if coordinator else {}
+        if not nets:
+            return self.async_abort(reason="networks_unsupported")
+        if user_input is not None:
+            self._net_id = user_input["network"]
+            return await self.async_step_network_edit()
+        schema = vol.Schema({
+            vol.Required("network"): SelectSelector(SelectSelectorConfig(
+                options=[SelectOptionDict(value=k, label=v) for k, v in nets.items()],
+                mode=SelectSelectorMode.LIST)),
+        })
+        return self.async_show_form(step_id="networks", data_schema=schema)
+
+    async def async_step_network_edit(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Netz bearbeiten: Grundeinstellungen, Subnetz und DHCP."""
+        from .netconfig import (  # noqa: PLC0415
+            NetworkConfigError,
+            async_read,
+            async_set_network,
+            flatten,
+        )
+
+        coordinator = self.config_entry.runtime_data
+        errors: dict[str, str] = {}
+        try:
+            current = flatten(await async_read(coordinator, self._net_id))
+        except NetworkConfigError:
+            return self.async_abort(reason="networks_unsupported")
+        except UniFiApiError:
+            return self.async_abort(reason="cannot_connect")
+        if user_input is not None:
+            confirm = user_input.pop("confirm_subnet_change", False)
+            if not user_input.get("domain_name"):
+                user_input["domain_name"] = ""
+            try:
+                await async_set_network(coordinator, self._net_id, user_input, confirm)
+            except NetworkConfigError as err:
+                errors["base"] = err.key
+            except UniFiApiError:
+                errors["base"] = "network_failed"
+            else:
+                return self.async_create_entry(data=dict(self.config_entry.options))
+            current |= {k: v for k, v in user_input.items() if v is not None}
+        dhcp = current.get("dhcp_mode") in (None, "SERVER")
+        fields: dict[Any, Any] = {
+            vol.Required("name", default=current.get("name") or ""): str,
+            vol.Required("enabled", default=bool(current.get("enabled"))): bool,
+        }
+        if current.get("vlan") not in (None, 1):
+            fields[vol.Required("vlan", default=current["vlan"])] = vol.All(
+                vol.Coerce(int), vol.Range(min=2, max=4009))
+        for key in ("internet_access", "isolation", "mdns", "cellular_backup"):
+            if current.get(key) is not None:
+                fields[vol.Required(key, default=bool(current[key]))] = bool
+        if current.get("gateway_ip"):
+            fields[vol.Required("gateway_ip", default=current["gateway_ip"])] = str
+            fields[vol.Required("prefix_length", default=current.get("prefix_length") or 24)] = \
+                vol.All(vol.Coerce(int), vol.Range(min=8, max=30))
+        if dhcp and current.get("dhcp_start"):
+            fields[vol.Required("dhcp_start", default=current["dhcp_start"])] = str
+            fields[vol.Required("dhcp_stop", default=current.get("dhcp_stop") or "")] = str
+            fields[vol.Required("lease_time", default=current.get("lease_time") or 86400)] = \
+                vol.All(vol.Coerce(int), vol.Range(min=60, max=31536000))
+            fields[vol.Optional("domain_name",
+                                description={"suggested_value": current.get("domain_name")})] = str
+            if current.get("ping_conflict_detection") is not None:
+                fields[vol.Required("ping_conflict_detection",
+                                    default=bool(current["ping_conflict_detection"]))] = bool
+        if current.get("gateway_ip"):
+            fields[vol.Required("confirm_subnet_change", default=False)] = bool
+        return self.async_show_form(
+            step_id="network_edit", data_schema=vol.Schema(fields), errors=errors,
+            description_placeholders={"network": current.get("name") or "",
+                                      "dhcp_mode": current.get("dhcp_mode") or "–"})
 
     async def async_step_region(
         self, user_input: dict[str, Any] | None = None

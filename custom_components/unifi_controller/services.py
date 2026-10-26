@@ -527,7 +527,41 @@ def async_setup_services(hass: HomeAssistant) -> None:
                 "grenzen": fw.limits,
                 "reihenfolge": plan}
 
+    async def set_network(call: ServiceCall) -> ServiceResponse:
+        """Gateway-Netz inkl. IPv4/DHCP über die offizielle API ändern."""
+        from .netconfig import FIELDS, NetworkConfigError, async_set_network  # noqa: PLC0415
+
+        c = _coordinator(hass, call)
+        changes = {k: call.data[k] for k in FIELDS if k in call.data}
+        try:
+            return await async_set_network(c, call.data["network"], changes,
+                                           call.data.get("confirm_subnet_change", False))
+        except NetworkConfigError as err:
+            raise ServiceValidationError(str(err)) from err
+        except UniFiApiError as err:
+            raise HomeAssistantError(f"Netz nicht geändert: {err}") from err
+
     reg = hass.services.async_register
+    reg(DOMAIN, "set_network", set_network, schema=vol.Schema({
+        **BASE,
+        vol.Required("network"): cv.string,
+        vol.Optional("name"): cv.string,
+        vol.Optional("enabled"): cv.boolean,
+        vol.Optional("vlan"): vol.All(vol.Coerce(int), vol.Range(min=1, max=4009)),
+        vol.Optional("internet_access"): cv.boolean,
+        vol.Optional("isolation"): cv.boolean,
+        vol.Optional("mdns"): cv.boolean,
+        vol.Optional("cellular_backup"): cv.boolean,
+        vol.Optional("gateway_ip"): _valid_ip,
+        vol.Optional("prefix_length"): vol.All(vol.Coerce(int), vol.Range(min=8, max=30)),
+        vol.Optional("auto_scale"): cv.boolean,
+        vol.Optional("dhcp_start"): _valid_ip,
+        vol.Optional("dhcp_stop"): _valid_ip,
+        vol.Optional("lease_time"): vol.All(vol.Coerce(int), vol.Range(min=60, max=31536000)),
+        vol.Optional("domain_name"): cv.string,
+        vol.Optional("ping_conflict_detection"): cv.boolean,
+        vol.Optional("confirm_subnet_change", default=False): cv.boolean,
+    }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "update_devices", update_devices, schema=vol.Schema({
         **BASE,
         vol.Optional("devices"): vol.All(cv.ensure_list, [cv.string]),

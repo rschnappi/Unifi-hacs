@@ -264,6 +264,10 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         await self._fetch_ipv4(out)
         return out
 
+    def invalidate_ipv4(self) -> None:
+        """Beim nächsten Konfigurationsabruf IPv4/DHCP neu lesen (nach Änderungen)."""
+        self._ipv4_at = 0.0
+
     async def _fetch_ipv4(self, out: dict[str, dict[str, dict]]) -> None:
         """IPv4/DHCP der Gateway-Netze aus der offiziellen API (ab Network 11.0.94).
 
