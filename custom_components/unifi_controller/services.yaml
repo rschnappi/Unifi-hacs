@@ -630,7 +630,7 @@ set_firewall_logging:
     config_entry_id: *id001
     policy:
       required: true
-      example: Infra -> MCL-Netze blocken
+      example: Gast -> Internet blocken
       selector:
         text: {}
     logging:
@@ -826,7 +826,7 @@ site_to_site_document:
     config_entry_id: *id001
     tunnel:
       required: true
-      example: MCL
+      example: ACME
       selector:
         text: {}
     notify:
