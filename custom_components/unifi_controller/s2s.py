@@ -952,18 +952,30 @@ def guide_html(md: str, title: str) -> str:
         elif s:
             out.append(f"<p>{inline(s)}</p>")
     flush()
-    css = ("body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:960px;"
-           "margin:24px auto;padding:0 16px;color:#1b1f24;line-height:1.45}"
-           "h1{font-size:1.6em;border-bottom:2px solid #0b62a4;padding-bottom:6px}"
-           "h2{font-size:1.2em;margin-top:1.6em;color:#0b62a4}"
+    css = (":root{color-scheme:light dark;--bg:#ffffff;--fg:#1b1f24;--muted:#57606a;"
+           "--line:#cfd6de;--head:#eef3f8;--code:#f2f4f7;--accent:#0b62a4;--warn-bg:#fff7ed;"
+           "--warn:#d97706}"
+           "@media (prefers-color-scheme:dark){:root{--bg:#16181c;--fg:#e6e9ee;--muted:#a3acb7;"
+           "--line:#3a414b;--head:#222831;--code:#2a303a;--accent:#5aa9e6;--warn-bg:#2b2116;"
+           "--warn:#f59e0b}}"
+           "html,body{background:var(--bg);color:var(--fg)}"
+           "body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;max-width:960px;"
+           "margin:24px auto;padding:0 16px;line-height:1.45}"
+           "h1{font-size:1.6em;border-bottom:2px solid var(--accent);padding-bottom:6px}"
+           "h2{font-size:1.2em;margin-top:1.6em;color:var(--accent)}"
+           "p,li,td,th,blockquote,h1{color:var(--fg)}"
            "table{border-collapse:collapse;width:100%;margin:8px 0;font-size:.92em}"
-           "th,td{border:1px solid #cfd6de;padding:5px 8px;text-align:left;vertical-align:top}"
-           "th{background:#eef3f8}code{background:#f2f4f7;padding:1px 4px;border-radius:3px;"
-           "word-break:break-all}blockquote{border-left:4px solid #d97706;margin:8px 0;"
-           "padding:6px 12px;background:#fff7ed}@media print{h2{page-break-after:avoid}"
-           "table{page-break-inside:avoid}}")
+           "th,td{border:1px solid var(--line);padding:5px 8px;text-align:left;vertical-align:top;"
+           "background:var(--bg)}th{background:var(--head)}"
+           "code{background:var(--code);color:var(--fg);padding:1px 4px;border-radius:3px;"
+           "word-break:break-all}"
+           "blockquote{border-left:4px solid var(--warn);margin:8px 0;padding:6px 12px;"
+           "background:var(--warn-bg)}"
+           "@media print{:root{--bg:#fff;--fg:#000;--head:#eee;--code:#f2f2f2;--line:#999}"
+           "h2{page-break-after:avoid}table{page-break-inside:avoid}}")
     return (f"<!doctype html><html lang=\"de\"><head><meta charset=\"utf-8\">"
             f"<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">"
+            f"<meta name=\"color-scheme\" content=\"light dark\">"
             f"<title>{html.escape(title)}</title><style>{css}</style></head><body>"
             + "\n".join(out) + "</body></html>")
 
