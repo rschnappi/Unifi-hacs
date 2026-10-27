@@ -930,3 +930,16 @@ site_to_site:
       default: false
       selector:
         boolean: {}
+reset_port_errors:
+  fields:
+    config_entry_id: *id001
+    device:
+      example: fw
+      selector:
+        text: {}
+    port:
+      selector:
+        number:
+          min: 1
+          max: 128
+          mode: box

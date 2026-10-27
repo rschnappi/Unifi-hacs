@@ -33,6 +33,8 @@ async def async_setup_entry(
             yield RotateWlanButton(coordinator, wlan_id)
         for mac, dev in coordinator.data.devices.items():
             yield RestartButton(coordinator, mac)
+            if dev.get("port_table"):
+                yield ResetPortErrorsButton(coordinator, mac)
             for port in dev.get("port_table", []):
                 if port.get("port_poe"):
                     yield PowerCycleButton(coordinator, mac, port["port_idx"])
@@ -52,6 +54,20 @@ class RestartButton(DeviceEntity, ButtonEntity):
     async def async_press(self) -> None:
         await self.coordinator.async_command(
             async_device_action(self.coordinator, self._mac, "RESTART"))
+
+
+class ResetPortErrorsButton(DeviceEntity, ButtonEntity):
+    """Port-Fehlerzähler aller Ports dieses Geräts auf 0 setzen (z. B. nach Kabeltausch)."""
+
+    _attr_icon = "mdi:counter"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: UniFiCoordinator, mac: str) -> None:
+        super().__init__(coordinator, mac, "reset_port_errors", "Port-Fehler zurücksetzen")
+
+    async def async_press(self) -> None:
+        self.coordinator.port_errors.reset(self.coordinator.data.devices, self._mac)
+        self.coordinator.async_update_listeners()
 
 
 class PowerCycleButton(DeviceEntity, ButtonEntity):

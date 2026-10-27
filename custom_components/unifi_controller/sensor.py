@@ -623,13 +623,17 @@ class PortSensor(DeviceEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         p = self._port
         conn = p.get("last_connection") or {}
+        pe = getattr(self.coordinator, "port_errors", None)
+        err = pe.adjusted(self._mac, p) if pe and p else {
+            "rx": p.get("rx_errors"), "tx": p.get("tx_errors"), "seit": None}
         problem = bool(p.get("up") and (
             (p.get("media") in ("GE", "2.5GE") and (p.get("speed") or 0) < 100)
-            or not p.get("full_duplex") or (p.get("rx_errors") or 0) > 100))
+            or not p.get("full_duplex") or (err["rx"] or 0) > 100))
         return {
             "name": p.get("name"), "link": bool(p.get("up")), "vollduplex": p.get("full_duplex"),
             "medium": p.get("media"), "netz": p.get("network_name"),
-            "rx_fehler": p.get("rx_errors"), "tx_fehler": p.get("tx_errors"),
+            "rx_fehler": err["rx"], "tx_fehler": err["tx"], "fehler_seit": err["seit"],
+            "rx_fehler_gesamt": p.get("rx_errors"),
             "rx_verworfen": p.get("rx_dropped"), "poe_watt": p.get("poe_power"),
             "geraet_mac": conn.get("mac"), "geraet_ip": conn.get("ip"),
             "problem": problem,
