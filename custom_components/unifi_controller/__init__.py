@@ -46,6 +46,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: UniFiConfigEntry) -> boo
     coordinator = UniFiCoordinator(hass, entry, client)
     coordinator.logs = LogManager(hass, coordinator)
     await coordinator.logs.async_setup()
+    from .porterrors import PortErrors  # noqa: PLC0415
+
+    coordinator.port_errors = PortErrors(hass, entry.entry_id)
+    await coordinator.port_errors.async_load()
     await coordinator.async_config_entry_first_refresh()
     entry.runtime_data = coordinator
     _async_migrate_legacy_ids(hass, entry, coordinator)

@@ -598,7 +598,26 @@ def async_setup_services(hass: HomeAssistant) -> None:
             raise HomeAssistantError(str(err)) from err
         return await async_publish(c, cfg, report, notify=call.data.get("notify", True))
 
+    async def reset_port_errors(call: ServiceCall) -> ServiceResponse:
+        """Port-Fehlerzähler zurücksetzen (Gerät/Port optional, sonst alle)."""
+        c = _coordinator(hass, call)
+        mac = None
+        if dev := call.data.get("device"):
+            key = dev.strip().lower()
+            mac = next((m for m, d in c.data.devices.items()
+                        if key in (m.lower(), (d.get("name") or "").lower())), None)
+            if mac is None:
+                raise ServiceValidationError(f"Gerät „{dev}“ nicht gefunden")
+        done = c.port_errors.reset(c.data.devices, mac, call.data.get("port"))
+        c.async_update_listeners()
+        return {"zurueckgesetzt": done}
+
     reg = hass.services.async_register
+    reg(DOMAIN, "reset_port_errors", reset_port_errors, schema=vol.Schema({
+        **BASE,
+        vol.Optional("device"): cv.string,
+        vol.Optional("port"): vol.All(vol.Coerce(int), vol.Range(min=1, max=128)),
+    }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "site_to_site", site_to_site, schema=vol.Schema({
         **BASE,
         vol.Required("firma"): cv.string,
