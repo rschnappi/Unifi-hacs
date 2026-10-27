@@ -604,8 +604,12 @@ def async_setup_services(hass: HomeAssistant) -> None:
         mac = None
         if dev := call.data.get("device"):
             key = dev.strip().lower()
-            mac = next((m for m, d in c.data.devices.items()
-                        if key in (m.lower(), (d.get("name") or "").lower())), None)
+            if key in ("gateway", "firewall"):
+                mac = next((m for m, d in c.data.devices.items()
+                            if (d.get("type") or "").lower() in ("udm", "ugw", "uxg")), None)
+            else:
+                mac = next((m for m, d in c.data.devices.items()
+                            if key in (m.lower(), (d.get("name") or "").lower())), None)
             if mac is None:
                 raise ServiceValidationError(f"Gerät „{dev}“ nicht gefunden")
         done = c.port_errors.reset(c.data.devices, mac, call.data.get("port"))
