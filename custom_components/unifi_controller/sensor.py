@@ -596,6 +596,12 @@ class ActiveWanSensor(DeviceEntity, SensorEntity):
                 "medium": up.get("media"), "uptime_s": up.get("uptime")}
 
 
+def _kind(dev: dict) -> str:
+    t = (dev.get("type") or "").lower()
+    return {"udm": "gateway", "ugw": "gateway", "uxg": "gateway", "usw": "switch",
+            "uap": "ap"}.get(t, t or "?")
+
+
 class PortSensor(DeviceEntity, SensorEntity):
     """Link-Geschwindigkeit eines Ports (0 = kein Link), Fehler/PoE/Gerät als Attribute."""
 
@@ -634,6 +640,8 @@ class PortSensor(DeviceEntity, SensorEntity):
             "medium": p.get("media"), "netz": p.get("network_name"),
             "rx_fehler": err["rx"], "tx_fehler": err["tx"], "fehler_seit": err["seit"],
             "rx_fehler_gesamt": p.get("rx_errors"),
+            "port": self._idx, "geraet": (self.device or {}).get("name"),
+            "geraet_typ": _kind(self.device or {}),
             "rx_verworfen": p.get("rx_dropped"), "poe_watt": p.get("poe_power"),
             "geraet_mac": conn.get("mac"), "geraet_ip": conn.get("ip"),
             "problem": problem,

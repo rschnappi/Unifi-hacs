@@ -934,7 +934,7 @@ reset_port_errors:
   fields:
     config_entry_id: *id001
     device:
-      example: fw
+      example: gateway
       selector:
         text: {}
     port:
