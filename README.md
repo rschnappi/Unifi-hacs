@@ -415,6 +415,14 @@ data:
   dry_run: true          # nur Plan anzeigen: Wellen, Raum, Grenzen
 ```
 
+Nur Access Points (Switches und Gateway bleiben unangetastet):
+
+```yaml
+action: unifi_controller.update_devices
+data:
+  device_types: [ap]     # ap, switch, gateway, other – leer = alle
+```
+
 Weitere Felder: `devices` (Namen/MACs), `include_manual`, `cancel`. Die Update-Entitäten zeigen
 `uplink`, `verbindung`, `vor_diesem_geraet`, `hinter_diesem_geraet` und `nur_manuell`.
 

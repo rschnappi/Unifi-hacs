@@ -739,6 +739,17 @@ update_devices:
       selector:
         text:
           multiple: true
+    device_types:
+      example: "ap"
+      selector:
+        select:
+          multiple: true
+          translation_key: firmware_device_types
+          options:
+            - ap
+            - switch
+            - gateway
+            - other
     include_manual:
       default: false
       selector:
