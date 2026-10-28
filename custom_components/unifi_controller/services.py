@@ -517,7 +517,8 @@ def async_setup_services(hass: HomeAssistant) -> None:
             macs = [fw.resolve(d) for d in call.data.get("devices") or []] or None
         except FirmwareError as err:
             raise ServiceValidationError(str(err)) from err
-        plan = fw.plan(macs, call.data.get("include_manual", False))
+        plan = fw.plan(macs, call.data.get("include_manual", False),
+                       call.data.get("device_types") or None)
         todo = [r["mac"] for r in plan if r["dabei"]]
         if not call.data.get("dry_run") and todo:
             fw.enqueue(todo)
@@ -676,6 +677,8 @@ def async_setup_services(hass: HomeAssistant) -> None:
     reg(DOMAIN, "update_devices", update_devices, schema=vol.Schema({
         **BASE,
         vol.Optional("devices"): vol.All(cv.ensure_list, [cv.string]),
+        vol.Optional("device_types"): vol.All(
+            cv.ensure_list, [vol.In(["ap", "switch", "gateway", "other"])]),
         vol.Optional("include_manual", default=False): cv.boolean,
         vol.Optional("dry_run", default=False): cv.boolean,
         vol.Optional("cancel", default=False): cv.boolean,

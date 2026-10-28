@@ -336,8 +336,13 @@ class FirmwareManager:
                 started.append(mac)
         return started
 
-    def plan(self, macs: list[str] | None = None, include_manual: bool = False) -> list[dict]:
-        """Ablauf in Wellen (gleich lange Updates angenommen) inkl. Begründungen."""
+    def plan(self, macs: list[str] | None = None, include_manual: bool = False,
+             types: list[str] | None = None) -> list[dict]:
+        """Ablauf in Wellen (gleich lange Updates angenommen) inkl. Begründungen.
+
+        ``types`` (ap/switch/gateway/other) beschränkt den Lauf auf diese Gerätetypen,
+        z. B. ``["ap"]`` = nur Access Points.
+        """
         devs = self.devices
         nodes = topology(devs)
         explicit = macs is not None
@@ -347,6 +352,8 @@ class FirmwareManager:
             reason = None
             if not dev.get("upgradable"):
                 reason = "aktuell"
+            elif types and kind(dev) not in types:
+                reason = "anderer Gerätetyp"
             elif mac in self.manual and not (include_manual or explicit):
                 reason = "nur manuell"
             elif dev.get("state") != ONLINE:
