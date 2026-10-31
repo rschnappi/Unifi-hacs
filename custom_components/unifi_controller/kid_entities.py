@@ -40,6 +40,12 @@ class KidEntity(CoordinatorEntity[UniFiCoordinator]):
         self._attr_name = name
         self._attr_device_info = kid_device_info(entry, kid)
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
+        if parent := getattr(super(), "async_entity_id_changed", None):
+            parent(old_entity_id)
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.kid.listeners.append(self._kid_changed)

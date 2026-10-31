@@ -16,7 +16,7 @@ from homeassistant.components.logbook import (
 )
 from homeassistant.core import Event, HomeAssistant, callback
 
-from .const import DOMAIN, EVENT_ALERT, EVENT_BAN, EVENT_LOG, EVENT_PRESENCE
+from .const import DOMAIN, EVENT_ALERT, EVENT_BAN, EVENT_LOG, EVENT_PRESENCE, EVENT_RULE_CHANGE
 
 ICONS = {
     "BLOCKED_BY_FIREWALL": "mdi:wall-fire",
@@ -127,6 +127,17 @@ def async_describe_events(
         return {LOGBOOK_ENTRY_NAME: name, LOGBOOK_ENTRY_MESSAGE: str(d.get("reason") or ""),
                 LOGBOOK_ENTRY_ICON: "mdi:home-account" if arrived else "mdi:home-export-outline"}
 
+    @callback
+    def describe_rule(event: Event) -> dict[str, str]:
+        d = event.data
+        verb = {"added": "angelegt", "modified": "geändert", "deleted": "gelöscht"}.get(
+            d.get("aenderung"), d.get("aenderung"))
+        fields = ", ".join(d.get("geaenderte_felder") or [])
+        return {LOGBOOK_ENTRY_NAME: f"{d.get('typ')} „{d.get('name')}“ {verb}",
+                LOGBOOK_ENTRY_MESSAGE: f"Felder: {fields}" if fields else "",
+                LOGBOOK_ENTRY_ICON: "mdi:file-document-edit"}
+
+    async_describe_event(DOMAIN, EVENT_RULE_CHANGE, describe_rule)
     async_describe_event(DOMAIN, EVENT_LOG, describe_log)
     async_describe_event(DOMAIN, EVENT_PRESENCE, describe_presence)
     async_describe_event(DOMAIN, EVENT_ALERT, describe_alert)

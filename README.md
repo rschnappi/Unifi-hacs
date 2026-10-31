@@ -101,8 +101,28 @@ Mit Präfix `Netz` (Beispiele aus einer echten Installation):
 | `sensor.netz_<gerät>_cpu` / `_speicher` / `_temperatur` / `_clients` / `_firmware` / `_ip` / `_gestartet` | Gerätewerte |
 | `switch.netz_<gerät>_led`, `button.netz_<gerät>_neustart` | LED, Neustart |
 | `switch.netz_<gerät>_port_<n>_poe`, `button.netz_<gerät>_port_<n>_power_cycle` | *(deaktiviert)* PoE je Port |
+| `event.netz_unifi_regelanderung` | Firewall-Policy, Adressliste, Traffic-Regel/-Route, Portweiterleitung, Route, DNS, Netz oder WLAN angelegt/geändert/gelöscht (siehe unten) |
+| `binary_sensor.netz_unifi_site_to_site_<tunnel>` / `_vpn_client_<name>` | Tunnel bzw. VPN-Client verbunden (Live-Status vom Gateway, Attribut `status`) |
+| `image.netz_unifi_wlan_<ssid>_qr_code` | QR-Code zum Verbinden – nur Gast-WLANs aktiv, andere deaktiviert (enthält das Passwort), keiner für WPA-Enterprise |
 
 Logs, Fail2Ban, Länder-Blocking, Diagnose, VPN-Zugänge, Kinder und Betrieb: siehe unten.
+
+### Regeländerungen
+
+Bei jedem Konfigurationsabruf vergleicht die Integration den Stand mit dem vorherigen und meldet jede Änderung
+– auch über HA selbst gemachte – als Ereignis `event.netz_unifi_regelanderung` (`added`/`modified`/`deleted`),
+als Bus-Event `unifi_controller_rule_change` und im Logbuch. Attribute: `typ`, `name`, `id`, `aktiv`,
+`geaenderte_felder` (nur Feldnamen, nie Werte; Passwort-Felder als „(geheim)“). Vom System angelegte Regeln
+zählen nicht. Der erste Abruf nach dem Start merkt sich nur den Stand; verschwinden alle Objekte eines Typs, wird
+das erst beim zweiten Abruf geglaubt.
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.netz_unifi_regelanderung
+    not_from: unavailable
+    not_to: unavailable
+```
 
 Passwörter, Schlüssel, PSKs, Tokens und Zertifikate (`x_*`-Felder und alles mit key/psk/token/secret/password/certificate
 im Namen) tauchen **nie** in Attributen, Diagnosen oder Service-Antworten auf – außer man fordert sie mit
