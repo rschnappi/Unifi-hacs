@@ -11,6 +11,7 @@ PLATFORMS: list[Platform] = [
     Platform.BUTTON,
     Platform.DEVICE_TRACKER,
     Platform.EVENT,
+    Platform.IMAGE,
     Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
@@ -81,3 +82,4 @@ EVENT_ALERT = f"{DOMAIN}_alert"
 EVENT_BAN = f"{DOMAIN}_ban"
 EVENT_NEW_CLIENT = f"{DOMAIN}_new_client"
 EVENT_PRESENCE = f"{DOMAIN}_presence"
+EVENT_RULE_CHANGE = f"{DOMAIN}_rule_change"

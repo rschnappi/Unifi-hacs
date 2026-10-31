@@ -23,7 +23,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    entities: list[EventEntity] = [Fail2BanEvent(coordinator)]
+    entities: list[EventEntity] = [Fail2BanEvent(coordinator), RuleChangeEvent(coordinator)]
     if coordinator.logs and coordinator.logs.enabled:
         entities.append(LogEvent(coordinator))
         entities.append(AlertEvent(coordinator))
@@ -38,6 +38,12 @@ class LogEvent(ControllerEntity, EventEntity):
 
     def __init__(self, coordinator: UniFiCoordinator) -> None:
         super().__init__(coordinator, "log_event", "Log")
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
+        if parent := getattr(super(), "async_entity_id_changed", None):
+            parent(old_entity_id)
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
@@ -65,6 +71,12 @@ class AlertEvent(ControllerEntity, EventEntity):
     def __init__(self, coordinator: UniFiCoordinator) -> None:
         super().__init__(coordinator, "alert_event", "Sicherheit")
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
+        if parent := getattr(super(), "async_entity_id_changed", None):
+            parent(old_entity_id)
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.async_on_remove(self.hass.bus.async_listen(EVENT_ALERT, self._handle))
@@ -89,6 +101,12 @@ class Fail2BanEvent(ControllerEntity, EventEntity):
     def __init__(self, coordinator: UniFiCoordinator) -> None:
         super().__init__(coordinator, "fail2ban_event", "Fail2Ban")
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
+        if parent := getattr(super(), "async_entity_id_changed", None):
+            parent(old_entity_id)
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
         self.async_on_remove(self.hass.bus.async_listen(EVENT_BAN, self._handle))
@@ -103,3 +121,33 @@ class Fail2BanEvent(ControllerEntity, EventEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Nur auf Ban-Events reagieren."""
+
+
+class RuleChangeEvent(ControllerEntity, EventEntity):
+    """Regeln/Netze/WLANs angelegt, geändert oder gelöscht (auch über HA selbst)."""
+
+    _attr_event_types = ["added", "modified", "deleted"]
+    _attr_icon = "mdi:file-document-edit"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "rule_change_event", "Regeländerung")
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
+        if parent := getattr(super(), "async_entity_id_changed", None):
+            parent(old_entity_id)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self.coordinator.rules.async_add_listener(self._handle))
+
+    @callback
+    def _handle(self, change: dict[str, Any]) -> None:
+        data = {k: v for k, v in change.items() if k != "aenderung"}
+        self._trigger_event(change["aenderung"], data)
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Nur bei Änderungen."""

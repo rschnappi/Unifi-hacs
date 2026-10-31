@@ -53,6 +53,8 @@ class UniFiData:
     devices: dict[str, dict] = field(default_factory=dict)   # mac -> dict
     clients: dict[str, dict] = field(default_factory=dict)   # mac -> dict (online)
     config: dict[str, dict[str, dict]] = field(default_factory=dict)  # dataset -> _id -> obj
+    # Live-Status der VPN-Verbindungen (network_id -> {type, status}); None = unbekannt
+    vpn: dict[str, dict] | None = None
 
     @cached_property
     def users(self) -> dict[str, dict]:
@@ -167,6 +169,9 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         from .firmware import FirmwareManager  # noqa: PLC0415
 
         self.firmware = FirmwareManager(self)
+        from .rulewatch import RuleWatcher  # noqa: PLC0415
+
+        self.rules = RuleWatcher(hass, entry.entry_id)
 
     @property
     def datasets(self) -> dict[str, str]:
@@ -215,6 +220,10 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
             config = await self._fetch_config(prev.config)
             self._last_config = now
             self._force_config = False
+            try:
+                self.rules.check(config, self._failed)
+            except Exception:  # noqa: BLE001 – Auswertung darf den Abruf nie stoppen
+                _LOGGER.exception("Regeländerungen nicht auswertbar")
 
         data = UniFiData(
             sysinfo=sysinfo or {},
@@ -222,6 +231,7 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
             devices=devices_idx,
             clients=clients_idx,
             config=config,
+            vpn=await self._fetch_vpn(config, prev.vpn),
         )
         if self.logs is not None:
             await self.logs.async_poll()
@@ -231,6 +241,26 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         except Exception:  # noqa: BLE001 – Zusatzfunktionen dürfen den Abruf nie stoppen
             _LOGGER.exception("Zusatzauswertung fehlgeschlagen")
         return data
+
+    async def _fetch_vpn(self, config: dict[str, dict[str, dict]],
+                         prev: dict[str, dict] | None) -> dict[str, dict] | None:
+        """Site-to-Site-/VPN-Client-Verbindungen; bei Fehlern kurz den letzten Stand behalten."""
+        if not any(n.get("purpose") in ("site-vpn", "vpn-client")
+                   for n in (config.get("networks") or {}).values()):
+            return {}
+        try:
+            res = await self.client.request("GET", "v2/vpn/connections")
+            conns = res.get("connections") if isinstance(res, dict) else None
+            if not isinstance(conns, list):
+                raise UniFiApiError("unerwartete Antwort von vpn/connections")
+        except UniFiApiError as err:
+            streak = self._fast_fail.get("vpn", 0) + 1
+            self._fast_fail["vpn"] = streak
+            _LOGGER.debug("VPN-Status nicht abrufbar (%s/%s): %s", streak, MAX_STALE, err)
+            return prev if streak <= MAX_STALE else None
+        self._fast_fail.pop("vpn", None)
+        return {c["network_id"]: {"type": c.get("type"), "status": c.get("status")}
+                for c in conns if isinstance(c, dict) and isinstance(c.get("network_id"), str)}
 
     async def _fetch_config(self, prev: dict[str, dict[str, dict]]) -> dict[str, dict[str, dict]]:
         keys = list(self.datasets)

@@ -10,6 +10,8 @@ from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
 from .presence_entities import presence_entities
 
+VPN_TUNNEL_PURPOSES = {"site-vpn": "Site-to-Site", "vpn-client": "VPN-Client"}
+
 # UniFi-Gerätestatus: 1 verbunden, 4 Update läuft, 5 provisioniert gerade – alles „online“
 ONLINE_STATES = {1, 4, 5}
 
@@ -31,6 +33,9 @@ async def async_setup_entry(
             for key in ("wan1", "wan2"):
                 if dev.get(key):
                     yield WanOnline(coordinator, mac, key)
+        for nid, net in coordinator.data.config.get("networks", {}).items():
+            if net.get("purpose") in VPN_TUNNEL_PURPOSES:
+                yield VpnTunnel(coordinator, nid)
 
     async_add_dynamic(coordinator, async_add_entities, factory)
     for sid, ents in presence_entities(coordinator, "binary_sensor").items():
@@ -120,3 +125,43 @@ class WanOnline(DeviceEntity, BinarySensorEntity):
                 "speed": w.get("speed"), "latenz_ms": w.get("latency"),
                 "verfuegbarkeit": stats.get("availability"),
                 "uptime_s": stats.get("uptime"), "downtime_s": stats.get("downtime")}
+
+
+class VpnTunnel(ControllerEntity, BinarySensorEntity):
+    """Site-to-Site-Tunnel bzw. VPN-Client verbunden (Live-Status vom Gateway)."""
+
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_icon = "mdi:vpn"
+
+    def __init__(self, coordinator: UniFiCoordinator, nid: str) -> None:
+        net = coordinator.data.config["networks"][nid]
+        label = VPN_TUNNEL_PURPOSES.get(net.get("purpose"), "VPN")
+        super().__init__(coordinator, f"vpn_tunnel_{nid}", f"{label} {net.get('name') or nid}")
+        self._nid = nid
+
+    @property
+    def _net(self) -> dict | None:
+        return self.coordinator.data.config.get("networks", {}).get(self._nid)
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._net is not None and self.coordinator.data.vpn is not None
+
+    @property
+    def is_on(self) -> bool | None:
+        vpn = self.coordinator.data.vpn
+        if vpn is None:
+            return None
+        return str((vpn.get(self._nid) or {}).get("status") or "").upper() == "CONNECTED"
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        net = self._net or {}
+        conn = (self.coordinator.data.vpn or {}).get(self._nid) or {}
+        return {
+            "status": conn.get("status") or "DISCONNECTED",
+            "aktiviert": net.get("enabled", True),
+            "art": VPN_TUNNEL_PURPOSES.get(net.get("purpose"), net.get("purpose")),
+            "vpn_typ": net.get("vpn_type"),
+            "remote_netze": net.get("remote_vpn_subnets") or [],
+        }
