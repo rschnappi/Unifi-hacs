@@ -172,9 +172,19 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         from .rulewatch import RuleWatcher  # noqa: PLC0415
 
         self.rules = RuleWatcher(hass, entry.entry_id)
-        from .dnsform import DnsForm  # noqa: PLC0415
+        from .forms import FormStatus  # noqa: PLC0415
 
-        self.dns_form = DnsForm(self)
+        self.forms_status = FormStatus()
+        self._forms: dict[str, Any] | None = None
+
+    @property
+    def forms(self) -> dict[str, Any]:
+        """Dashboard-Formulare (beim ersten Zugriff nach dem ersten Abruf angelegt)."""
+        if self._forms is None:
+            from .forms import build_forms  # noqa: PLC0415
+
+            self._forms = build_forms(self)
+        return self._forms
 
     @property
     def datasets(self) -> dict[str, str]:

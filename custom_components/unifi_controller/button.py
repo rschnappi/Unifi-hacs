@@ -12,6 +12,7 @@ from .coordinator import UniFiConfigEntry, UniFiCoordinator
 from .integration import async_device_action
 from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
+from .form_entities import form_entities
 from .resources import object_name
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan, is_wireguard
 
@@ -26,8 +27,6 @@ async def async_setup_entry(
     def factory():
         yield SpeedtestButton(coordinator)
         yield BackupButton(coordinator)
-        yield DnsSaveButton(coordinator)
-        yield DnsDeleteButton(coordinator)
         for net_id, net in coordinator.data.config.get("networks", {}).items():
             if is_wireguard(net):
                 yield RotateWireguardButton(coordinator, net_id)
@@ -42,6 +41,7 @@ async def async_setup_entry(
                     yield PowerCycleButton(coordinator, mac, port["port_idx"])
 
     async_add_dynamic(coordinator, async_add_entities, factory)
+    async_add_entities(form_entities(coordinator, "button"))
     for sid, ents in kid_entities(coordinator, "button").items():
         async_add_entities(ents, config_subentry_id=sid)
 
@@ -207,26 +207,3 @@ async def async_create_backup(coordinator: UniFiCoordinator) -> dict:
         _save_backup, coordinator.hass.config.config_dir, data, version)
     return {"path": path, "size_kb": round(len(data) / 1024)}
 
-
-class DnsSaveButton(ControllerEntity, ButtonEntity):
-    """DNS-Formular speichern: gleiche Domain + Typ wird geändert, sonst neu angelegt."""
-
-    _attr_icon = "mdi:content-save"
-
-    def __init__(self, coordinator: UniFiCoordinator) -> None:
-        super().__init__(coordinator, "dns_form_save", "DNS-Eintrag speichern")
-
-    async def async_press(self) -> None:
-        await self.coordinator.dns_form.async_save()
-
-
-class DnsDeleteButton(ControllerEntity, ButtonEntity):
-    """Den im Formular gewählten DNS-Eintrag (Domain + Typ) löschen."""
-
-    _attr_icon = "mdi:delete"
-
-    def __init__(self, coordinator: UniFiCoordinator) -> None:
-        super().__init__(coordinator, "dns_form_delete", "DNS-Eintrag löschen")
-
-    async def async_press(self) -> None:
-        await self.coordinator.dns_form.async_delete()
