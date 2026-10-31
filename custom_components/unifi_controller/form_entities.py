@@ -12,6 +12,7 @@ from homeassistant.core import callback
 
 from .coordinator import UniFiCoordinator
 from .entity import ControllerEntity
+from .dnsform import device_records
 from .forms import NEW, Action, Field, Form
 
 
@@ -153,6 +154,24 @@ class FormStatusSensor(ControllerEntity, SensorEntity):
                 "zeit": st.time.isoformat() if st.time else None}
 
 
+class DeviceDnsSensor(ControllerEntity, SensorEntity):
+    """Lokale DNS-Namen an Geräten (feste IP + „Local DNS Record“) – für die DNS-Tabelle."""
+
+    _attr_icon = "mdi:dns-outline"
+    _attr_native_unit_of_measurement = "Einträge"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "device_dns", "DNS Gerätenamen")
+
+    @property
+    def native_value(self) -> int:
+        return len(device_records(self.coordinator))
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"eintraege": device_records(self.coordinator)}
+
+
 def form_entities(coordinator: UniFiCoordinator, platform: str) -> list:
     out: list = []
     for form in coordinator.forms.values():
@@ -166,4 +185,5 @@ def form_entities(coordinator: UniFiCoordinator, platform: str) -> list:
             out.extend(FormButton(form, a) for a in spec.actions)
     if platform == "sensor":
         out.append(FormStatusSensor(coordinator))
+        out.append(DeviceDnsSensor(coordinator))
     return out
