@@ -1,16 +1,12 @@
 """Lokale DNS-Einträge anlegen/ändern/löschen – gemeinsam für Dienste und Dashboard-Formular.
 
-Das Formular besteht aus Entitäten am Controller-Gerät: „DNS-Eintrag laden“ (Auswahl),
-„DNS Domain“, „DNS Typ“, „DNS Ziel“ (Eingaben) und den Knöpfen „DNS-Eintrag speichern“
-und „DNS-Eintrag löschen“. Damit geht alles direkt im Dashboard, ohne Helfer oder Skripte.
+Das Dashboard-Formular dazu steht in forms.py.
 """
 from __future__ import annotations
 
-from collections.abc import Callable
 import ipaddress
 from typing import TYPE_CHECKING, Any
 
-from homeassistant.core import callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from .api import UniFiApiError
@@ -97,55 +93,3 @@ async def async_delete(c: UniFiCoordinator, domain: str, tkey: str | None) -> st
     except UniFiApiError as err:
         raise HomeAssistantError(f"DNS-Eintrag {domain}: {err}") from err
     return object_name(hits[0])
-
-
-class DnsForm:
-    """Gemeinsamer Zustand der Formular-Entitäten."""
-
-    def __init__(self, coordinator: UniFiCoordinator) -> None:
-        self.c = coordinator
-        self.domain = ""
-        self.tkey = "A"
-        self.value = ""
-        self._listeners: list[Callable[[], None]] = []
-
-    @callback
-    def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
-        self._listeners.append(cb)
-        return lambda: self._listeners.remove(cb)
-
-    @callback
-    def changed(self) -> None:
-        for cb in list(self._listeners):
-            cb()
-
-    @callback
-    def set(self, **kw: Any) -> None:
-        for key, val in kw.items():
-            setattr(self, key, val)
-        self.changed()
-
-    @callback
-    def load(self, rec: dict | None) -> None:
-        if rec is None:
-            self.set(domain="", tkey="A", value="")
-            return
-        self.set(domain=rec["domain"], tkey=TYPE_KEYS.get(rec["type"], "A"),
-                 value=str(rec.get(DNS_VALUE_FIELD.get(rec["type"], ""), "") or ""))
-
-    def current(self) -> dict | None:
-        hits = find(self.c, self.domain, self.tkey) if self.domain else []
-        return hits[0] if hits else None
-
-    async def async_save(self) -> dict[str, Any]:
-        cur = self.current()
-        ttl = int(cur.get("ttlSeconds") or 0) if cur else 0
-        enabled = bool(cur.get("enabled", True)) if cur else True
-        res = await async_set(self.c, self.domain, self.tkey, self.value, ttl, enabled)
-        self.changed()
-        return res
-
-    async def async_delete(self) -> str:
-        name = await async_delete(self.c, self.domain, self.tkey)
-        self.load(None)
-        return name

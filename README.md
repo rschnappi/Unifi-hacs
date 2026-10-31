@@ -104,9 +104,26 @@ Mit Präfix `Netz` (Beispiele aus einer echten Installation):
 | `event.netz_unifi_regelanderung` | Firewall-Policy, Adressliste, Traffic-Regel/-Route, Portweiterleitung, Route, DNS, Netz oder WLAN angelegt/geändert/gelöscht (siehe unten) |
 | `binary_sensor.netz_unifi_site_to_site_<tunnel>` / `_vpn_client_<name>` | Tunnel bzw. VPN-Client verbunden (Live-Status vom Gateway, Attribut `status`) |
 | `image.netz_unifi_wlan_<ssid>_qr_code` | QR-Code zum Verbinden – nur Gast-WLANs aktiv, andere deaktiviert (enthält das Passwort), keiner für WPA-Enterprise |
-| `select.netz_unifi_dns_eintrag_laden`, `text.netz_unifi_dns_domain`, `select.netz_unifi_dns_typ`, `text.netz_unifi_dns_ziel`, `button.netz_unifi_dns_eintrag_speichern` / `_loschen` | DNS-Formular fürs Dashboard: Eintrag laden (oder „Neuer Eintrag“), Felder ändern, speichern bzw. löschen. Gleiche Domain + Typ wird geändert, sonst neu angelegt; A/AAAA/Forward werden auf gültige IP geprüft |
+| `sensor.netz_unifi_letzte_aktion` | Ergebnis der letzten Dashboard-Formular-Aktion (Attribute `formular`, `erfolgreich`, `zeit`) |
 
 Logs, Fail2Ban, Länder-Blocking, Diagnose, VPN-Zugänge, Kinder und Betrieb: siehe unten.
+
+### Dashboard-Formulare
+
+Was sonst nur per Dienst geht, lässt sich direkt im Dashboard bedienen. Jedes Formular hat (optional) eine Auswahl
+„… laden“ (bestehenden Eintrag in die Felder holen oder „Neuer Eintrag“), Eingabefelder und Knöpfe. Das Ergebnis steht
+in `sensor.netz_unifi_letzte_aktion`, Fehler meldet HA direkt.
+
+| Formular | Felder | Knöpfe |
+| --- | --- | --- |
+| DNS | Domain, Typ (A/AAAA/CNAME/MX/TXT/Forward), Ziel | speichern (gleiche Domain + Typ = ändern), löschen |
+| Portweiterleitung | Name, Port außen, Ziel-IP, Port innen, Protokoll, Quelle (`any`/IP/Netz) | speichern (gleicher Name = ändern), löschen |
+| VPN-Zugang (WireGuard) | Name, Server | anlegen (Konfiguration + QR als Benachrichtigung), löschen |
+| Fail2Ban | IP, Dauer (min, 0 = dauerhaft), Grund | IP sperren, IP entsperren |
+| Gutschein | Name, Anzahl, Dauer (h), Geräte | erzeugen (Codes als Benachrichtigung), abgelaufene löschen |
+| Firmware | Gerätetyp (Alle/Access Points/Switches/Gateway) | Plan anzeigen, Updates starten, abbrechen |
+
+Netze (Subnetz/DHCP) und Site-to-Site bleiben bewusst in den Dialogen unter *Konfigurieren* bzw. *Site-to-Site*.
 
 ### Regeländerungen
 

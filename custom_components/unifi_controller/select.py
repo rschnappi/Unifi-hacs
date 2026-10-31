@@ -5,14 +5,14 @@ import time
 from typing import Any
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .api import UniFiApiError
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
-from .dnsform import FORM_TYPES, NEW, label, records
+from .form_entities import form_entities
 from .entity import ControllerEntity, async_add_dynamic
 
 AUTO = "Automatisch (keine Zuordnung)"
@@ -46,7 +46,7 @@ async def async_setup_entry(
                 yield ClientNetworkSelect(coordinator, mac)
 
     async_add_dynamic(coordinator, async_add_entities, factory)
-    async_add_entities([DnsRecordSelect(coordinator), DnsTypeSelect(coordinator)])
+    async_add_entities(form_entities(coordinator, "select"))
 
 
 class ClientNetworkSelect(ControllerEntity, SelectEntity):
@@ -118,62 +118,3 @@ class ClientNetworkSelect(ControllerEntity, SelectEntity):
         except UniFiApiError as err:
             raise HomeAssistantError(str(err)) from err
 
-
-class DnsRecordSelect(ControllerEntity, SelectEntity):
-    """DNS-Formular: bestehenden Eintrag laden (füllt Domain, Typ, Ziel) oder neu beginnen."""
-
-    _attr_icon = "mdi:dns"
-
-    def __init__(self, coordinator: UniFiCoordinator) -> None:
-        super().__init__(coordinator, "dns_form_record", "DNS-Eintrag laden")
-
-    @callback
-    def async_entity_id_changed(self, old_entity_id: str) -> None:
-        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
-        if parent := getattr(super(), "async_entity_id_changed", None):
-            parent(old_entity_id)
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        self.async_on_remove(self.coordinator.dns_form.async_add_listener(self.async_write_ha_state))
-
-    @property
-    def options(self) -> list[str]:
-        return [NEW, *(label(r) for r in records(self.coordinator))]
-
-    @property
-    def current_option(self) -> str:
-        cur = self.coordinator.dns_form.current()
-        return label(cur) if cur else NEW
-
-    async def async_select_option(self, option: str) -> None:
-        rec = next((r for r in records(self.coordinator) if label(r) == option), None)
-        self.coordinator.dns_form.load(rec)
-
-
-class DnsTypeSelect(ControllerEntity, SelectEntity):
-    """DNS-Formular: Typ des Eintrags."""
-
-    _attr_icon = "mdi:format-list-bulleted-type"
-    _attr_options = FORM_TYPES
-
-    def __init__(self, coordinator: UniFiCoordinator) -> None:
-        super().__init__(coordinator, "dns_form_type", "DNS Typ")
-
-    @callback
-    def async_entity_id_changed(self, old_entity_id: str) -> None:
-        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
-        if parent := getattr(super(), "async_entity_id_changed", None):
-            parent(old_entity_id)
-
-    async def async_added_to_hass(self) -> None:
-        await super().async_added_to_hass()
-        self.async_on_remove(self.coordinator.dns_form.async_add_listener(self.async_write_ha_state))
-
-    @property
-    def current_option(self) -> str | None:
-        tkey = self.coordinator.dns_form.tkey
-        return tkey if tkey in FORM_TYPES else None
-
-    async def async_select_option(self, option: str) -> None:
-        self.coordinator.dns_form.set(tkey=option)

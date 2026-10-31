@@ -26,6 +26,7 @@ from .coordinator import UniFiConfigEntry, UniFiCoordinator, UniFiData
 from .integration import sensors as integration_sensors
 from .kid_entities import kid_entities
 from .entity import ControllerEntity, DeviceEntity, async_add_dynamic
+from .form_entities import form_entities
 from .region import country_names, state as region_state, zone_id
 from .resources import LAN_PURPOSES, VPN_PURPOSES, object_name, scalar_attrs
 from .wireguard import users_of, wg_servers
@@ -242,6 +243,7 @@ async def async_setup_entry(
                     yield DeviceSensor(coordinator, mac, desc)
 
     async_add_dynamic(coordinator, async_add_entities, factory)
+    async_add_entities(form_entities(coordinator, "sensor"))
     for sid, ents in kid_entities(coordinator, "sensor").items():
         async_add_entities(ents, config_subentry_id=sid)
 
