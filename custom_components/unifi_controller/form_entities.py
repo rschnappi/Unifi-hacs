@@ -27,9 +27,14 @@ class _FormEntity(ControllerEntity):
         if parent := getattr(super(), "async_entity_id_changed", None):
             parent(old_entity_id)
 
+    _listen_key: str | None = None
+    _listen = True
+
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        self.async_on_remove(self.form.async_add_listener(self.async_write_ha_state))
+        if self._listen:
+            self.async_on_remove(self.form.async_add_listener(self.async_write_ha_state,
+                                                              self._listen_key))
 
 
 class FormText(_FormEntity, TextEntity):
@@ -38,6 +43,7 @@ class FormText(_FormEntity, TextEntity):
     def __init__(self, form: Form, f: Field) -> None:
         super().__init__(form, f.key, f.name, f.icon)
         self._key = f.key
+        self._listen_key = f.key
 
     @property
     def native_value(self) -> str:
@@ -53,6 +59,7 @@ class FormNumber(_FormEntity, NumberEntity):
     def __init__(self, form: Form, f: Field) -> None:
         super().__init__(form, f.key, f.name, f.icon)
         self._key = f.key
+        self._listen_key = f.key
         self._attr_native_min_value = f.minimum
         self._attr_native_max_value = f.maximum
         self._attr_native_step = f.step
@@ -71,6 +78,7 @@ class FormSelect(_FormEntity, SelectEntity):
     def __init__(self, form: Form, f: Field) -> None:
         super().__init__(form, f.key, f.name, f.icon)
         self._key = f.key
+        self._listen_key = f.key
         self._opts = f.options
 
     @property
@@ -107,6 +115,7 @@ class FormLoader(_FormEntity, SelectEntity):
 
 
 class FormButton(_FormEntity, ButtonEntity):
+    _listen = False
     def __init__(self, form: Form, a: Action) -> None:
         super().__init__(form, a.key, a.name, a.icon)
         self._action = a
