@@ -81,25 +81,33 @@ class Form:
         self.c = coordinator
         self.spec = spec
         self.values: dict[str, Any] = {f.key: f.default for f in spec.fields}
-        self._listeners: list[Callable[[], None]] = []
+        self._listeners: list[tuple[Callable[[], None], str | None]] = []
 
     def __getitem__(self, key: str) -> Any:
         return self.values.get(key)
 
     @callback
-    def async_add_listener(self, cb: Callable[[], None]) -> Callable[[], None]:
-        self._listeners.append(cb)
-        return lambda: self._listeners.remove(cb)
+    def async_add_listener(self, cb: Callable[[], None], key: str | None = None) -> Callable[[], None]:
+        """key = nur bei Änderung dieses Felds benachrichtigen (None = bei jeder Änderung)."""
+        entry = (cb, key)
+        self._listeners.append(entry)
+        return lambda: self._listeners.remove(entry)
 
     @callback
-    def changed(self) -> None:
-        for cb in list(self._listeners):
-            cb()
+    def changed(self, keys: set[str] | None = None) -> None:
+        # Nur betroffene Felder neu schreiben: jedes Neuzeichnen eines Eingabefelds kann am
+        # Tablet den Fokus/die Tastatur verspringen lassen.
+        for cb, key in list(self._listeners):
+            if key is None or keys is None or key in keys:
+                cb()
 
     @callback
     def set(self, **kw: Any) -> None:
+        diff = {k for k, v in kw.items() if self.values.get(k) != v}
+        if not diff:
+            return
         self.values.update(kw)
-        self.changed()
+        self.changed(diff)
 
     @callback
     def reset(self) -> None:
