@@ -172,6 +172,9 @@ class UniFiCoordinator(DataUpdateCoordinator[UniFiData]):
         from .rulewatch import RuleWatcher  # noqa: PLC0415
 
         self.rules = RuleWatcher(hass, entry.entry_id)
+        from .dnsform import DnsForm  # noqa: PLC0415
+
+        self.dns_form = DnsForm(self)
 
     @property
     def datasets(self) -> dict[str, str]:

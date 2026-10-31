@@ -104,6 +104,7 @@ Mit Präfix `Netz` (Beispiele aus einer echten Installation):
 | `event.netz_unifi_regelanderung` | Firewall-Policy, Adressliste, Traffic-Regel/-Route, Portweiterleitung, Route, DNS, Netz oder WLAN angelegt/geändert/gelöscht (siehe unten) |
 | `binary_sensor.netz_unifi_site_to_site_<tunnel>` / `_vpn_client_<name>` | Tunnel bzw. VPN-Client verbunden (Live-Status vom Gateway, Attribut `status`) |
 | `image.netz_unifi_wlan_<ssid>_qr_code` | QR-Code zum Verbinden – nur Gast-WLANs aktiv, andere deaktiviert (enthält das Passwort), keiner für WPA-Enterprise |
+| `select.netz_unifi_dns_eintrag_laden`, `text.netz_unifi_dns_domain`, `select.netz_unifi_dns_typ`, `text.netz_unifi_dns_ziel`, `button.netz_unifi_dns_eintrag_speichern` / `_loschen` | DNS-Formular fürs Dashboard: Eintrag laden (oder „Neuer Eintrag“), Felder ändern, speichern bzw. löschen. Gleiche Domain + Typ wird geändert, sonst neu angelegt; A/AAAA/Forward werden auf gültige IP geprüft |
 
 Logs, Fail2Ban, Länder-Blocking, Diagnose, VPN-Zugänge, Kinder und Betrieb: siehe unten.
 

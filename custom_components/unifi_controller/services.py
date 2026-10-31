@@ -28,7 +28,8 @@ from .integration import (
     quote_filter,
     voucher_view,
 )
-from .resources import DATASETS, DNS_VALUE_FIELD, OFFICIAL, is_dns, object_name, redact
+from .dnsform import DNS_TYPES, async_delete as dns_delete, async_set as dns_set
+from .resources import DATASETS, OFFICIAL, object_name, redact
 from .secrets_mgmt import async_rotate_wireguard, async_rotate_wlan
 
 _LOGGER = logging.getLogger(__name__)
@@ -42,8 +43,6 @@ BASE = {vol.Optional(ATTR_ENTRY): cv.string}
 MAC_SCHEMA = vol.Schema({**BASE, vol.Required(ATTR_MAC): cv.string})
 RESOURCE = vol.In([*DATASETS, *OFFICIAL])
 ANY_RESOURCE = vol.In([*DATASETS, *OFFICIAL, *INT_RESOURCES])
-DNS_TYPES = {"A": "A_RECORD", "AAAA": "AAAA_RECORD", "CNAME": "CNAME_RECORD", "MX": "MX_RECORD",
-             "TXT": "TXT_RECORD", "SRV": "SRV_RECORD", "FORWARD": "FORWARD_DOMAIN"}
 
 
 def _valid_ip(value: str) -> str:
@@ -475,35 +474,15 @@ def async_setup_services(hass: HomeAssistant) -> None:
     # ------------------------------------------------------------ DNS (offizielle API)
     async def set_dns_record(call: ServiceCall) -> ServiceResponse:
         c = _coordinator(hass, call)
-        rtype = DNS_TYPES[call.data["type"]]
-        domain = call.data["domain"].strip().lower()
-        body: dict[str, Any] = {"type": rtype, "enabled": call.data["enabled"], "domain": domain,
-                                DNS_VALUE_FIELD[rtype]: call.data["value"].strip()}
-        if rtype != "FORWARD_DOMAIN":
-            body["ttlSeconds"] = call.data["ttl"]
-        for key in ("priority", "weight", "port", "service", "protocol"):
-            if key in call.data:
-                body[key] = call.data[key]
-        cur = [o for o in c.data.config.get("dns_records", {}).values()
-               if is_dns(o) and o["domain"].lower() == domain and o["type"] == rtype]
-        if cur:
-            res = await _run(c.async_update_object("dns_records", cur[0], body))
-        else:
-            res = await _run(c.async_create_object("dns_records", body))
-        return {"action": "geändert" if cur else "angelegt", "record": redact(res)}
+        extra = {k: call.data[k] for k in ("priority", "weight", "port", "service", "protocol")
+                 if k in call.data}
+        res = await dns_set(c, call.data["domain"], call.data["type"], call.data["value"],
+                            call.data["ttl"], call.data["enabled"], extra)
+        return {"action": res["action"], "record": redact(res["record"])}
 
     async def delete_dns_record(call: ServiceCall) -> ServiceResponse:
         c = _coordinator(hass, call)
-        domain = call.data["domain"].strip().lower()
-        rtype = DNS_TYPES.get(call.data.get("type", ""), None)
-        hits = [o for o in c.data.config.get("dns_records", {}).values()
-                if is_dns(o) and o["domain"].lower() == domain and (not rtype or o["type"] == rtype)]
-        if not hits:
-            raise ServiceValidationError(f"Kein DNS-Eintrag für {domain}")
-        if len(hits) > 1 and not rtype:
-            raise ServiceValidationError(f"{domain} hat mehrere Einträge – type angeben")
-        await _run(c.async_delete_object("dns_records", hits[0]))
-        return {"deleted": object_name(hits[0])}
+        return {"deleted": await dns_delete(c, call.data["domain"], call.data.get("type"))}
 
     async def update_devices(call: ServiceCall) -> ServiceResponse:
         """Firmware-Rollout in Topologie-Reihenfolge (Blätter zuerst, Gateway zuletzt)."""
