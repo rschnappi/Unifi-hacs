@@ -31,6 +31,30 @@ def label(rec: dict) -> str:
     return f"{rec['domain']} ({TYPE_KEYS.get(rec['type'], rec['type'])})"
 
 
+def device_records(c: UniFiCoordinator) -> list[dict[str, Any]]:
+    """Lokale DNS-Namen, die direkt an Geräten hängen (feste IP + „Local DNS Record“)."""
+    out = []
+    for u in (c.data.users if c.data else {}).values():
+        name = (u.get("local_dns_record") or "").strip().lower()
+        if name:
+            out.append({"domain": name, "ip": u.get("fixed_ip") or u.get("last_ip"),
+                        "geraet": u.get("name") or u.get("hostname") or u.get("mac"),
+                        "aktiv": bool(u.get("local_dns_record_enabled", True))})
+    return sorted(out, key=lambda r: r["domain"])
+
+
+def _api_error(c: UniFiCoordinator, domain: str, err: Exception) -> HomeAssistantError:
+    if "overlap-with-local-dns" in str(err):
+        dev = next((r for r in device_records(c) if r["domain"] == domain), None)
+        if dev:
+            return HomeAssistantError(
+                f"{domain} ist schon als DNS-Name am Gerät „{dev['geraet']}“ ({dev['ip']}) "
+                "eingetragen – dort ändern (UniFi: Gerät → Einstellungen → Local DNS Record)")
+        return HomeAssistantError(f"{domain} überschneidet sich mit einem lokalen DNS-Namen "
+                                  "(Gerät mit „Local DNS Record“ oder Domain-Name des Netzes)")
+    return HomeAssistantError(f"DNS-Eintrag {domain}: {err}")
+
+
 def find(c: UniFiCoordinator, domain: str, tkey: str | None) -> list[dict]:
     domain = domain.strip().lower().rstrip(".")
     rtype = DNS_TYPES.get(tkey or "")
@@ -78,7 +102,7 @@ async def async_set(c: UniFiCoordinator, domain: str, tkey: str, value: str, ttl
         else:
             res = await c.async_create_object("dns_records", body)
     except UniFiApiError as err:
-        raise HomeAssistantError(f"DNS-Eintrag {domain}: {err}") from err
+        raise _api_error(c, domain, err) from err
     return {"action": "geändert" if cur else "angelegt", "record": res}
 
 
