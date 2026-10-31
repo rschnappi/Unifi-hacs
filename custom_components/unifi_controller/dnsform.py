@@ -41,7 +41,7 @@ def find(c: UniFiCoordinator, domain: str, tkey: str | None) -> list[dict]:
 def check_value(tkey: str, value: str) -> str:
     value = value.strip()
     if not value:
-        raise ServiceValidationError("Ziel fehlt")
+        raise ServiceValidationError("Ziel fehlt – Eingabe mit Enter bestätigen oder Feld verlassen")
     try:
         if tkey in ("A", "FORWARD"):
             return str(ipaddress.IPv4Address(value)) if tkey == "A" else str(ipaddress.ip_address(value))

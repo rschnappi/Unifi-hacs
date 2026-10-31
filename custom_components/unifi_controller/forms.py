@@ -10,6 +10,7 @@ Das Ergebnis jeder Aktion steht im Sensor „Letzte Aktion“; Fehler zeigt HA a
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 import ipaddress
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     from .coordinator import UniFiCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+SETTLE_S = 1.0
 
 
 @dataclass
@@ -105,6 +107,9 @@ class Form:
         self.changed()
 
     async def async_run(self, action: Action) -> str:
+        # Ein Textfeld schickt seinen Wert erst beim Verlassen. Tippt man direkt aus dem Feld
+        # auf den Knopf, kommt der Wert kurz NACH dem Knopfdruck an – darauf warten.
+        await asyncio.sleep(SETTLE_S)
         try:
             msg = await action.run(self)
         except (HomeAssistantError, ServiceValidationError) as err:
@@ -153,7 +158,7 @@ async def _service(form: Form, service: str, data: dict[str, Any], response: boo
 def _need(form: Form, key: str, what: str) -> str:
     val = str(form[key] or "").strip()
     if not val:
-        raise ServiceValidationError(f"{what} fehlt")
+        raise ServiceValidationError(f"{what} fehlt – Eingabe mit Enter bestätigen oder Feld verlassen")
     return val
 
 
