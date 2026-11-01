@@ -195,7 +195,8 @@ def _dns_load(form: Form, option: str | None) -> None:
         form.reset()
         return
     form.set(domain=rec["domain"], type=TYPE_KEYS.get(rec["type"], "A"),
-             value=str(rec.get(DNS_VALUE_FIELD.get(rec["type"], ""), "") or ""))
+             value=str(rec.get(DNS_VALUE_FIELD.get(rec["type"], ""), "") or ""),
+             enabled="aktiv" if rec.get("enabled", True) else "deaktiviert")
 
 
 def _dns_current(form: Form) -> str | None:
@@ -208,8 +209,19 @@ async def _dns_save(form: Form) -> str:
     cur = hits[0] if hits else None
     res = await dns_set(form.c, form["domain"], form["type"], form["value"],
                         int(cur.get("ttlSeconds") or 0) if cur else 0,
-                        bool(cur.get("enabled", True)) if cur else True)
-    return f"DNS {form['domain']} ({form['type']}) → {form['value']} {res['action']}"
+                        form["enabled"] != "deaktiviert")
+    return (f"DNS {form['domain']} ({form['type']}) → {form['value']} {res['action']}"
+            f" ({form['enabled']})")
+
+
+async def _dns_toggle(form: Form) -> str:
+    hits = dns_find(form.c, form["domain"], form["type"]) if form["domain"] else []
+    if not hits:
+        raise ServiceValidationError("Erst einen bestehenden DNS-Eintrag laden")
+    new = not hits[0].get("enabled", True)
+    await form.c.async_update_object("dns_records", hits[0], {"enabled": new})
+    form.set(enabled="aktiv" if new else "deaktiviert")
+    return f"DNS {form['domain']} {'aktiviert' if new else 'deaktiviert'}"
 
 
 async def _dns_delete(form: Form) -> str:
@@ -222,8 +234,10 @@ DNS = FormSpec(
     "dns", "DNS",
     fields=[Field("domain", "DNS Domain", "text", "mdi:web"),
             Field("type", "DNS Typ", "select", "mdi:format-list-bulleted-type", "A", FORM_TYPES),
-            Field("value", "DNS Ziel", "text", "mdi:target")],
+            Field("value", "DNS Ziel", "text", "mdi:target"),
+            Field("enabled", "DNS Status", "select", "mdi:toggle-switch", "aktiv", ["aktiv", "deaktiviert"])],
     actions=[Action("save", "DNS-Eintrag speichern", "mdi:content-save", _dns_save),
+             Action("toggle", "DNS-Eintrag ein/aus", "mdi:toggle-switch", _dns_toggle),
              Action("delete", "DNS-Eintrag löschen", "mdi:delete", _dns_delete)],
     loader=Loader("DNS-Eintrag laden", lambda c: [dns_label(r) for r in dns_records(c)],
                   _dns_load, _dns_current),
@@ -249,7 +263,8 @@ def _pf_load(form: Form, option: str | None) -> None:
         return
     form.set(name=object_name(obj), dst_port=str(obj.get("dst_port") or ""),
              fwd=str(obj.get("fwd") or ""), fwd_port=str(obj.get("fwd_port") or ""),
-             proto=obj.get("proto") or "tcp_udp", src=str(obj.get("src") or "any"))
+             proto=obj.get("proto") or "tcp_udp", src=str(obj.get("src") or "any"),
+             enabled="aktiv" if obj.get("enabled", True) else "deaktiviert")
 
 
 def _pf_current(form: Form) -> str | None:
@@ -270,7 +285,7 @@ async def _pf_save(form: Form) -> str:
             raise ServiceValidationError(f"Quelle: „{src}“ – „any“, IP oder Netz (CIDR)") from err
     body = {"name": name, "dst_port": dst, "fwd": fwd, "fwd_port": fwd_port,
             "proto": form["proto"] or "tcp_udp", "src": src,
-            "src_limiting_enabled": src != "any"}
+            "src_limiting_enabled": src != "any", "enabled": form["enabled"] != "deaktiviert"}
     if src != "any":
         body["src_limiting_type"] = "ip"
     cur = _pf_by_name(form.c, name)
@@ -278,8 +293,18 @@ async def _pf_save(form: Form) -> str:
         await form.c.async_update_object("portforwards", cur, body)
         return f"Portweiterleitung „{name}“ geändert ({dst} → {fwd}:{fwd_port})"
     await form.c.async_create_object("portforwards", {
-        **body, "enabled": True, "log": False, "pfwd_interface": "wan"})
+        **body, "log": False, "pfwd_interface": "wan"})
     return f"Portweiterleitung „{name}“ angelegt ({dst} → {fwd}:{fwd_port})"
+
+
+async def _pf_toggle(form: Form) -> str:
+    cur = _pf_by_name(form.c, form["name"])
+    if cur is None:
+        raise ServiceValidationError("Erst eine bestehende Portweiterleitung laden")
+    new = not cur.get("enabled", True)
+    await form.c.async_update_object("portforwards", cur, {"enabled": new})
+    form.set(enabled="aktiv" if new else "deaktiviert")
+    return f"Portweiterleitung „{object_name(cur)}“ {'aktiviert' if new else 'deaktiviert'}"
 
 
 async def _pf_delete(form: Form) -> str:
@@ -299,8 +324,11 @@ PORTFORWARD = FormSpec(
             Field("fwd_port", "Portweiterleitung Port innen", "text", "mdi:export"),
             Field("proto", "Portweiterleitung Protokoll", "select", "mdi:swap-horizontal",
                   "tcp_udp", ["tcp_udp", "tcp", "udp"]),
-            Field("src", "Portweiterleitung Quelle", "text", "mdi:shield-account", "any")],
+            Field("src", "Portweiterleitung Quelle", "text", "mdi:shield-account", "any"),
+            Field("enabled", "Portweiterleitung Status", "select", "mdi:toggle-switch", "aktiv",
+                  ["aktiv", "deaktiviert"])],
     actions=[Action("save", "Portweiterleitung speichern", "mdi:content-save", _pf_save),
+             Action("toggle", "Portweiterleitung ein/aus", "mdi:toggle-switch", _pf_toggle),
              Action("delete", "Portweiterleitung löschen", "mdi:delete", _pf_delete)],
     loader=Loader("Portweiterleitung laden", lambda c: [object_name(o) for o in _pf_all(c)],
                   _pf_load, _pf_current),
