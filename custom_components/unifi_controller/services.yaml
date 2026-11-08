@@ -503,6 +503,38 @@ kid_bonus:
           min: 5
           max: 480
           unit_of_measurement: min
+kid_ban:
+  fields:
+    config_entry_id: *id001
+    kid:
+      required: true
+      example: Benjamin
+      selector:
+        text: {}
+    duration:
+      default: 1w
+      selector:
+        select:
+          translation_key: ban_duration
+          options:
+          - 1w
+          - 14d
+          - 3w
+          - 1m
+    days:
+      selector:
+        number:
+          min: 1
+          max: 365
+          unit_of_measurement: d
+kid_ban_cancel:
+  fields:
+    config_entry_id: *id001
+    kid:
+      required: true
+      example: Benjamin
+      selector:
+        text: {}
 kid_internet:
   fields:
     config_entry_id: *id001

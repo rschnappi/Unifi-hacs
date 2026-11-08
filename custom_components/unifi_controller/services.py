@@ -287,6 +287,16 @@ def async_setup_services(hass: HomeAssistant) -> None:
         until = await _run(_kid(c, call.data["kid"]).async_bonus(call.data["minutes"]))
         return {"bonus_bis": until.isoformat()}
 
+    async def kid_ban(call: ServiceCall) -> ServiceResponse:
+        c = _coordinator(hass, call)
+        until = await _run(_kid(c, call.data["kid"]).async_ban(
+            call.data.get("duration"), call.data.get("days")))
+        return {"gesperrt_bis": until.isoformat()}
+
+    async def kid_ban_cancel(call: ServiceCall) -> None:
+        c = _coordinator(hass, call)
+        await _run(_kid(c, call.data["kid"]).async_cancel_ban())
+
     async def kid_free_days(call: ServiceCall) -> ServiceResponse:
         c = _coordinator(hass, call)
         kid = _kid(c, call.data["kid"])
@@ -844,6 +854,16 @@ def async_setup_services(hass: HomeAssistant) -> None:
         **BASE, vol.Required("kid"): cv.string,
         vol.Optional("minutes", default=30): vol.All(vol.Coerce(int), vol.Range(min=5, max=480)),
     }), supports_response=SupportsResponse.OPTIONAL)
+    from .kids import BAN_CHOICES  # noqa: PLC0415
+
+    reg(DOMAIN, "kid_ban", kid_ban, schema=vol.Schema({
+        **BASE, vol.Required("kid"): cv.string,
+        vol.Optional("duration", default="1w"): vol.In(list(BAN_CHOICES)),
+        vol.Optional("days"): vol.All(vol.Coerce(int), vol.Range(min=1, max=365)),
+    }), supports_response=SupportsResponse.OPTIONAL)
+    reg(DOMAIN, "kid_ban_cancel", kid_ban_cancel, schema=vol.Schema({
+        **BASE, vol.Required("kid"): cv.string,
+    }))
     reg(DOMAIN, "kid_internet", kid_internet, schema=vol.Schema({
         **BASE, vol.Required("kid"): cv.string, vol.Required("online"): cv.boolean,
     }))

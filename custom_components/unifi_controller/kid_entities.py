@@ -17,7 +17,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .api import UniFiApiError
 from .const import DOMAIN
 from .coordinator import UniFiConfigEntry, UniFiCoordinator
-from .kids import CONF_LOCK_SCHOOL, CONF_LOCK_WEEKEND, CONF_UNLOCK, Kid
+from .kids import BAN_CHOICES, CONF_LOCK_SCHOOL, CONF_LOCK_WEEKEND, CONF_UNLOCK, Kid
 
 
 def kid_device_info(entry: UniFiConfigEntry, kid: Kid) -> DeviceInfo:
@@ -83,8 +83,10 @@ class KidInternetSwitch(KidEntity, SwitchEntity):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         bonus = self.kid.bonus_until
+        ban = self.kid.ban_until
         return {"netz": (self.kid.network or {}).get("name"),
                 "bonus_bis": bonus.isoformat() if bonus else None,
+                "gesperrt_bis": ban.isoformat() if ban else None,
                 "zeitplan": self.kid.schedule}
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -150,6 +152,29 @@ class KidBonusButton(KidEntity, ButtonEntity):
         await _guard(self.kid.async_bonus(self._minutes))
 
 
+class KidBanButton(KidEntity, ButtonEntity):
+    """Längere Sperre (1 Woche … 1 Monat) bis zur Freigabezeit am letzten Tag."""
+
+    _attr_icon = "mdi:lock-clock"
+
+    def __init__(self, coordinator: UniFiCoordinator, kid: Kid, choice: str) -> None:
+        super().__init__(coordinator, kid, f"ban_{choice}", f"Sperre {BAN_CHOICES[choice][0]}")
+        self._choice = choice
+
+    async def async_press(self) -> None:
+        await _guard(self.kid.async_ban(self._choice))
+
+
+class KidBanCancelButton(KidEntity, ButtonEntity):
+    _attr_icon = "mdi:lock-open-variant"
+
+    def __init__(self, coordinator: UniFiCoordinator, kid: Kid) -> None:
+        super().__init__(coordinator, kid, "ban_cancel", "Sperre aufheben")
+
+    async def async_press(self) -> None:
+        await _guard(self.kid.async_cancel_ban())
+
+
 # ------------------------------------------------------------------ Sensoren
 class KidDevicesSensor(KidEntity, SensorEntity):
     _attr_icon = "mdi:devices"
@@ -202,6 +227,22 @@ class KidBonusSensor(KidEntity, SensorEntity):
         return self.kid.bonus_until
 
 
+class KidBanSensor(KidEntity, SensorEntity):
+    _attr_device_class = SensorDeviceClass.TIMESTAMP
+    _attr_icon = "mdi:lock-clock"
+
+    def __init__(self, coordinator: UniFiCoordinator, kid: Kid) -> None:
+        super().__init__(coordinator, kid, "ban_until", "Gesperrt bis")
+
+    @property
+    def native_value(self) -> datetime | None:
+        return self.kid.ban_until
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"dauer": self.kid.ban_label}
+
+
 def kid_entities(coordinator: UniFiCoordinator, platform: str) -> dict[str, list]:
     """Entitäten je Subentry (Kind oder Person, Subentry-ID → Liste) für eine Plattform."""
     out: dict[str, list] = {}
@@ -212,10 +253,12 @@ def kid_entities(coordinator: UniFiCoordinator, platform: str) -> dict[str, list
         elif platform == "time":
             ents = [KidTime(coordinator, kid, *t) for t in TIMES]
         elif platform == "button":
-            ents = [KidBonusButton(coordinator, kid, 30), KidBonusButton(coordinator, kid, 60)]
+            ents = [KidBonusButton(coordinator, kid, 30), KidBonusButton(coordinator, kid, 60),
+                    *(KidBanButton(coordinator, kid, c) for c in BAN_CHOICES),
+                    KidBanCancelButton(coordinator, kid)]
         elif platform == "sensor":
             ents = [KidDevicesSensor(coordinator, kid), KidBonusSensor(coordinator, kid),
-                    KidNextLockSensor(coordinator, kid)]
+                    KidNextLockSensor(coordinator, kid), KidBanSensor(coordinator, kid)]
         else:
             ents = []
         out[sid] = ents
