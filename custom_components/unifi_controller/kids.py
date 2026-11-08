@@ -11,9 +11,14 @@ Zeitplan:
     Feiertage; in den „gefilterten“ Kalendern nur Termine mit dem Filtertext im Titel, z. B.
     „Benjamin“ im Familienkalender) gilt die Wochenend-Zeit, sonst die Schultag-Zeit
     (läuft eine Bonuszeit, wird bis zu deren Ende verschoben)
+
+Längere Sperre (1 Woche, 14 Tage, 3 Wochen, 1 Monat): Kind sofort offline, bleibt bis zur
+Freigabezeit am letzten Tag gesperrt – Zeitplan-Freigabe, Bonus und „online“-Schalten wirken
+in der Zeit nicht; nur „Sperre aufheben“ beendet sie vorzeitig.
 """
 from __future__ import annotations
 
+import calendar
 from collections.abc import Callable
 from datetime import date, datetime, time, timedelta
 import ipaddress
@@ -56,6 +61,11 @@ FREE_WEEKDAYS = {5, 6}              # Sa, So (date.weekday(): Mo=0 … So=6)
 SYNC_KEYS = (*TIME_KEYS, CONF_SCHEDULE, CONF_FREE_CALENDARS, CONF_FREE_FILTER_CALENDARS,
              CONF_FREE_FILTER)
 VERIFY_DELAY_S = 30
+# Längere Sperren: Schlüssel → (Bezeichnung, Tage, Monate)
+BAN_CHOICES: dict[str, tuple[str, int, int]] = {
+    "1w": ("1 Woche", 7, 0), "14d": ("14 Tage", 14, 0),
+    "3w": ("3 Wochen", 21, 0), "1m": ("1 Monat", 0, 1),
+}
 FW = "firewall_policies"
 
 
@@ -70,6 +80,13 @@ def parse_time(value: Any, default: str) -> time:
         return time.fromisoformat(str(value or default))
     except ValueError:
         return time.fromisoformat(default)
+
+
+def add_months(day: date, months: int) -> date:
+    """Monate addieren; gibt es den Tag im Zielmonat nicht (31.), gilt dessen letzter Tag."""
+    m = day.month - 1 + months
+    year, month = day.year + m // 12, m % 12 + 1
+    return date(year, month, min(day.day, calendar.monthrange(year, month)[1]))
 
 
 def subnet_of(net: dict) -> str | None:
@@ -155,6 +172,7 @@ class Kid:
         self._save = save
         self._unsubs: list[Callable[[], None]] = []
         self._bonus_unsub: Callable[[], None] | None = None
+        self._ban_unsub: Callable[[], None] | None = None
         self.listeners: list[Callable[[], None]] = []
         for key in TIME_KEYS:
             self._state.setdefault(key, subentry.data.get(key) or {
@@ -256,6 +274,30 @@ class Kid:
         value = dt_util.parse_datetime(ts)
         return value if value and value > dt_util.utcnow() else None
 
+    @property
+    def ban_until(self) -> datetime | None:
+        """Ende einer längeren Sperre (None = keine aktiv)."""
+        ts = self._state.get("ban_until")
+        if not ts:
+            return None
+        value = dt_util.parse_datetime(ts)
+        return value if value and value > dt_util.utcnow() else None
+
+    @property
+    def ban_label(self) -> str | None:
+        return self._state.get("ban_label") if self.ban_until else None
+
+    async def async_in_free_window(self) -> bool:
+        """Darf das Kind laut Zeitplan JETZT online sein (Freigabe ≤ jetzt < heutige Sperre)?"""
+        if not self.schedule:
+            return True
+        now = dt_util.now()
+        reason = await self.async_free_reason(now.date() + timedelta(days=1))
+        lock = self.get_time(CONF_LOCK_WEEKEND if reason else CONF_LOCK_SCHOOL)
+        start = datetime.combine(now.date(), self.get_time(CONF_UNLOCK), tzinfo=now.tzinfo)
+        end = datetime.combine(now.date(), lock, tzinfo=now.tzinfo)
+        return start <= now < end
+
     def devices(self) -> list[dict[str, Any]]:
         """Dem Kindernetz zugeordnete Geräte (Override) + aktuell verbundene."""
         out: dict[str, dict[str, Any]] = {}
@@ -305,6 +347,11 @@ class Kid:
             _LOGGER.info("Kind %s: Policy „%s“ angelegt", self.name, body["name"])
 
     async def async_set_online(self, online: bool, reason: str = "") -> None:
+        if online and (until := self.ban_until) is not None:
+            _LOGGER.warning("Kind %s: Freigabe (%s) ignoriert – gesperrt bis %s",
+                            self.name, reason, dt_util.as_local(until))
+            self._notify()          # Schalter im Dashboard springt zurück
+            return
         for which in (0, 1):
             p = self.policy(which)
             if p is not None and bool(p.get("enabled")) == online:
@@ -345,6 +392,10 @@ class Kid:
         self.hass.async_create_task(self.async_refresh_plan())
         if (until := self.bonus_until) is not None and self.online:
             self._schedule_bonus_end(until)
+        if (until := self.ban_until) is not None:
+            self._schedule_ban_end(until)
+        elif self._state.get("ban_until"):      # während HA aus war abgelaufen
+            self.hass.async_create_task(self._async_end_ban("Sperre abgelaufen"))
 
     @callback
     def async_stop(self) -> None:
@@ -354,13 +405,17 @@ class Kid:
         if self._bonus_unsub:
             self._bonus_unsub()
             self._bonus_unsub = None
+        if self._ban_unsub:
+            self._ban_unsub()
+            self._ban_unsub = None
 
     async def _on_unlock(self, _now: datetime) -> None:
         if not self.schedule:
             return
         self._state["bonus_until"] = None
         self._save()
-        await self.async_set_online(True, "Freigabe morgens")
+        if self.ban_until is None:
+            await self.async_set_online(True, "Freigabe morgens")
         await self.async_refresh_plan()
 
     async def _on_new_day(self, _now: datetime) -> None:
@@ -404,6 +459,31 @@ class Kid:
 
         self._bonus_unsub = async_track_point_in_time(self.hass, _end, until)
 
+    @callback
+    def _schedule_ban_end(self, until: datetime) -> None:
+        if self._ban_unsub:
+            self._ban_unsub()
+
+        async def _end(_now: datetime) -> None:
+            self._ban_unsub = None
+            await self._async_end_ban("Sperre abgelaufen")
+
+        self._ban_unsub = async_track_point_in_time(self.hass, _end, until)
+
+    async def _async_end_ban(self, reason: str) -> None:
+        """Sperre beenden; online nur, wenn der Zeitplan es gerade erlaubt."""
+        self._state["ban_until"] = None
+        self._state["ban_label"] = None
+        self._save()
+        if self._ban_unsub:
+            self._ban_unsub()
+            self._ban_unsub = None
+        if await self.async_in_free_window():
+            await self.async_set_online(True, reason)
+        else:
+            _LOGGER.info("Kind %s: %s – bleibt bis zur Freigabe morgens gesperrt", self.name, reason)
+            self._notify()
+
     # ------------------------------------------------------------ Bedienung
     async def async_set_schedule(self, enabled: bool) -> None:
         self._state[CONF_SCHEDULE] = enabled
@@ -428,8 +508,43 @@ class Kid:
         self.async_start()          # startet auch die Plan-Neuberechnung
         self._notify()
 
+    async def async_ban(self, choice: str | None = None, days: int | None = None) -> datetime:
+        """Längere Sperre: sofort offline bis zur Freigabezeit am Ende-Tag (ab heute gerechnet;
+        erneutes Setzen ersetzt eine laufende Sperre)."""
+        today = dt_util.now().date()
+        if days:
+            end_day, label = today + timedelta(days=days), f"{days} Tage"
+        elif choice in BAN_CHOICES:
+            label, d, months = BAN_CHOICES[choice]
+            end_day = add_months(today, months) + timedelta(days=d)
+        else:
+            raise UniFiApiError(f"Unbekannte Sperrdauer: {choice}")
+        tz = dt_util.get_default_time_zone()
+        until = datetime.combine(end_day, self.get_time(CONF_UNLOCK), tzinfo=tz)
+        await self.async_cancel_bonus()
+        self._state["ban_until"] = until.isoformat()
+        self._state["ban_label"] = label
+        self._save()
+        self._schedule_ban_end(until)
+        for which in (0, 1):            # direkt sperren (async_set_online(False) prüft nichts)
+            p = self.policy(which)
+            if p is not None and not p.get("enabled"):
+                await self.coordinator.async_update_object(FW, p, {"enabled": True})
+        _LOGGER.info("Kind %s: gesperrt für %s bis %s", self.name, label, until)
+        self.hass.loop.call_later(VERIFY_DELAY_S, lambda: self.hass.async_create_task(
+            self._async_verify(False)))
+        self._notify()
+        return until
+
+    async def async_cancel_ban(self) -> None:
+        if self._state.get("ban_until"):
+            await self._async_end_ban("Sperre aufgehoben")
+
     async def async_bonus(self, minutes: int) -> datetime:
         """Bonuszeit: gesperrt → sofort frei bis jetzt+x; frei → abendliche Sperre verschiebt sich."""
+        if (ban := self.ban_until) is not None:
+            raise UniFiApiError(f"{self.name} ist gesperrt bis "
+                                f"{dt_util.as_local(ban):%d.%m.%Y %H:%M} – kein Bonus möglich")
         now = dt_util.utcnow()
         start = max(now, self.bonus_until or now)
         until = start + timedelta(minutes=minutes)

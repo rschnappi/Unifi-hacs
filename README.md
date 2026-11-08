@@ -29,7 +29,7 @@ Getestet mit UDM Pro SE, UniFi OS 5 / Network 10.6. Sollte mit allen UniFi-OS-Ko
 | Länder-Blocking | nur erlaubte Länder + Ausnahmen (z. B. Claude) von außen, als Zonen-Policies |
 | Diagnose | Traffic-Flows abfragen („warum wird X geblockt?“), Alarm bei neuem Gerät |
 | VPN-Zugänge | WireGuard-Clients in HA anlegen/löschen – Konfiguration + QR-Code als Benachrichtigung |
-| Kinder | Kinderprofile (anlegen/ändern/löschen) mit Zeitplan, Bonuszeit und Geräte-Zuordnung; App-Nutzung und App-Sperren |
+| Kinder | Kinderprofile (anlegen/ändern/löschen) mit Zeitplan, Bonuszeit, längerer Sperre und Geräte-Zuordnung; App-Nutzung und App-Sperren |
 | Betrieb | Firmware-Updates (Update-Entitäten), Speedtest, WAN1/WAN2-Status, Port-Status, Temperaturen, Controller-Backup |
 | Alles andere | generische Services zum Lesen/Ändern/Anlegen/Löschen jedes Config-Objekts + roher API-Zugriff |
 
@@ -362,7 +362,14 @@ Die Integration legt die Policies **„Sperre <Name> Internet“** (→ External
 | `button.kind_<name>_bonus_30_min` / `_bonus_60_min` | gesperrt → sofort frei bis jetzt+x; frei → abendliche Sperre wird verschoben; mehrfach drücken verlängert |
 | `sensor.kind_<name>_gerate` | Geräte online; Attribut `geraete` (Name, MAC, IP, zugeordnet) |
 | `sensor.kind_<name>_bonus_bis` | Ende der Bonuszeit |
+| `button.kind_<name>_sperre_1_woche` / `_sperre_14_tage` / `_sperre_3_wochen` / `_sperre_1_monat` | längere Sperre: sofort offline bis zur Freigabezeit am letzten Tag (ab heute gerechnet, erneut drücken ersetzt die laufende Sperre) |
+| `button.kind_<name>_sperre_aufheben` | längere Sperre vorzeitig beenden – online nur, wenn der Zeitplan es gerade erlaubt |
+| `sensor.kind_<name>_gesperrt_bis` | Ende der längeren Sperre; Attribut `dauer` |
 | `sensor.kind_<name>_nachste_sperre` | nächste abendliche Sperre; Attribute `art`, `morgen_frei`, `grund` (z. B. „Nationalfeiertag“) |
+
+**Längere Sperre:** Während sie läuft, wirken Freigabe morgens, Bonus und „online“-Schalten
+(Schalter, `kid_internet`, Skripte) nicht – nur *Sperre aufheben* beendet sie vorzeitig.
+Sie überdauert Neustarts von Home Assistant.
 
 30 Sekunden nach jeder Änderung wird geprüft, ob der Controller sie übernommen hat – sonst Benachrichtigung.
 
@@ -380,6 +387,7 @@ Das Gerät wird danach kurz getrennt und bekommt sofort eine Adresse aus dem Kin
 
 Weitere Services: `add_kid` (Profil per Automation/Skript anlegen, optional mit bestehendem `network`),
 `kid_bonus` (`kid`, `minutes`), `kid_internet` (`kid`, `online`),
+`kid_ban` (`kid`, `duration`: `1w`/`14d`/`3w`/`1m` oder `days`), `kid_ban_cancel` (`kid`),
 `kid_free_days` (`kid`, `free_calendars`, `free_filter_calendars`, `free_filter`).
 
 ## Kinder: App-Nutzung & App-Sperren
