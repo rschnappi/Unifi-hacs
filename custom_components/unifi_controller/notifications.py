@@ -19,6 +19,7 @@ NOTIFY_CATEGORIES: dict[str, str] = {
     "updates": "Updates",
     "kids": "Kinder",
     "presence": "Anwesenheit",
+    "hotspot": "Hotspot-Gäste (Freigabe)",
 }
 PERSISTENT = "persistent_notification"
 # Dienste, die keine eigenen Empfänger sind

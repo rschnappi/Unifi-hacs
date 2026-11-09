@@ -6,7 +6,8 @@
   ],
   "config_flow": true,
   "dependencies": [
-    "http"
+    "http",
+    "webhook"
   ],
   "documentation": "https://github.com/rschnappi/Unifi-hacs",
   "integration_type": "hub",

@@ -85,3 +85,17 @@ EVENT_BAN = f"{DOMAIN}_ban"
 EVENT_NEW_CLIENT = f"{DOMAIN}_new_client"
 EVENT_PRESENCE = f"{DOMAIN}_presence"
 EVENT_RULE_CHANGE = f"{DOMAIN}_rule_change"
+EVENT_HOTSPOT = f"{DOMAIN}_hotspot"
+# Hotspot-Webhooks / External Authorization
+CONF_HS_WEBHOOK_ID = "hotspot_webhook_id"   # in entry.data
+CONF_HS_SECRET = "hotspot_secret"
+CONF_HS_MODE = "hotspot_mode"
+CONF_HS_TIMEOUT = "hotspot_timeout"
+CONF_HS_ON_TIMEOUT = "hotspot_on_timeout"
+CONF_HS_MINUTES = "hotspot_minutes"
+CONF_HS_DOWN = "hotspot_down_kbps"
+CONF_HS_UP = "hotspot_up_kbps"
+CONF_HS_DATA_MB = "hotspot_data_mb"
+DEFAULT_HS_MODE = "ask"
+DEFAULT_HS_TIMEOUT = 45
+DEFAULT_HS_ON_TIMEOUT = "deny"
