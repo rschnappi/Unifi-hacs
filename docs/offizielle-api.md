@@ -1,7 +1,7 @@
 # Offizielle UniFi Network API
 
 Ab Network 9 hat UniFi eine offizielle, dokumentierte API (`/proxy/network/integration/v1`).
-Geprüft gegen **UniFi Network API 11.0.99** (identisch mit 11.0.97 und 11.0.94; gegenüber 11.0.89: gleiche 72 Endpunkte, gleiche Geräte-/Port-/Client-Aktionen, alle genutzten Felder unverändert). Die Integration nutzt sie zusätzlich zur internen
+Geprüft gegen **UniFi Network API 11.1.47** (Endpunkte identisch mit 11.0.99/11.0.97/11.0.94; neu ist nur die Doku der ausgehenden Hotspot-Webhooks, siehe unten; gegenüber 11.0.89: gleiche 72 Endpunkte, gleiche Geräte-/Port-/Client-Aktionen, alle genutzten Felder unverändert). Die Integration nutzt sie zusätzlich zur internen
 Legacy-/v2-API, und zwar dort, wo sie mehr kann. Ohne diese API (ältere Controller) läuft alles
 wie bisher weiter.
 
@@ -62,7 +62,16 @@ Kinderprofil-Netze (das offizielle Anlage-Schema für Gateway-Netze ist nicht do
 
 ## Was intern bleiben muss
 
-Für folgende Bereiche hat die offizielle API (11.0.99) keine Endpunkte: Traffic-Regeln und
+Für folgende Bereiche hat die offizielle API (11.1.47) keine Endpunkte: Traffic-Regeln und
 -Routen (App-Sperren), Portweiterleitungen, statische Routen, QoS, Port-Profile, bekannte
 Clients (Netz-Zuordnung, Sperren), WireGuard-Zugänge, System-Log, Flows, Speedtest, Backups,
 LED/Locate und die Live-Statistik (Signal, AP, Temperaturen, Portfehler, Durchsatz).
+
+## Hotspot-Webhooks (ab 11.1.47 dokumentiert)
+
+Keine neuen Endpunkte, sondern Aufrufe, die die Konsole an eine eigene HTTPS-URL schickt (Hotspot-Seite):
+`guest.signed_in` (Gast am Portal angemeldet: MAC, SSID, AP, Ablauf), `personal_wifi_password.created`
+(enthält das Passwort), `test`, sowie **External Authorization** `guest.verify` – die Konsole fragt, ob ein Gast
+online darf; Antwort `{"approved": true|false, "expires_at"?, "rate_limit_up_kbps"?, "rate_limit_down_kbps"?,
+"data_limit_mb"?}` innerhalb des Timeouts (Standard 60 s). Signatur: Header `X-UniFi-Signature: t=…,v1=…` =
+HMAC-SHA256(secret, "t.body"), bei External Authorization immer gesetzt. Von der Integration noch nicht genutzt.
