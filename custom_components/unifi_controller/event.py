@@ -23,7 +23,8 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    entities: list[EventEntity] = [Fail2BanEvent(coordinator), RuleChangeEvent(coordinator)]
+    entities: list[EventEntity] = [Fail2BanEvent(coordinator), RuleChangeEvent(coordinator),
+                                   HotspotEvent(coordinator)]
     if coordinator.logs and coordinator.logs.enabled:
         entities.append(LogEvent(coordinator))
         entities.append(AlertEvent(coordinator))
@@ -151,3 +152,34 @@ class RuleChangeEvent(ControllerEntity, EventEntity):
     @callback
     def _handle_coordinator_update(self) -> None:
         """Nur bei Änderungen."""
+
+
+class HotspotEvent(ControllerEntity, EventEntity):
+    """Hotspot: Gast angemeldet, eigenes WLAN-Passwort, Freigabe-Anfrage, zugelassen/abgelehnt."""
+
+    _attr_icon = "mdi:account-wifi"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        from .hotspot import EVENT_TYPES  # noqa: PLC0415
+
+        super().__init__(coordinator, "hotspot_event", "Hotspot")
+        self._attr_event_types = EVENT_TYPES
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
+        if parent := getattr(super(), "async_entity_id_changed", None):
+            parent(old_entity_id)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self.coordinator.hotspot.async_add_listener(self._handle))
+
+    @callback
+    def _handle(self, kind: str, data: dict[str, Any]) -> None:
+        self._trigger_event(kind, data)
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """Nur bei Webhooks."""

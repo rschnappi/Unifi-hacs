@@ -125,6 +125,23 @@ in `sensor.netz_unifi_letzte_aktion`, Fehler meldet HA direkt.
 
 Netze (Subnetz/DHCP) und Site-to-Site bleiben bewusst in den Dialogen unter *Konfigurieren* bzw. *Site-to-Site*.
 
+### Hotspot: Gast-Freigabe & Webhooks (Network 11.1.47+)
+
+Der Hotspot kann Anmeldungen per Webhook melden und bei jedem Gast nachfragen, ob er online darf
+(*External Authorization*). Einrichtung: *Konfigurieren → Hotspot* zeigt die Webhook-URL; diese in UniFi unter
+Hotspot als Webhook-URL **und** als External-Authorization-URL eintragen, das dort angezeigte Secret (`whsec_…`)
+in den Optionen hinterlegen. Ohne Secret bzw. mit ungültiger Signatur wird nie freigegeben.
+
+| Modus | Verhalten bei `guest.verify` |
+| --- | --- |
+| Nachfragen | Benachrichtigung mit **Zulassen/Ablehnen** (Empfänger: *Benachrichtigungen → Hotspot-Gäste*), Knöpfe `button.netz_unifi_hotspot_gast_zulassen`/`_ablehnen`, Dienst `unifi_controller.hotspot_decide`; ohne Antwort innerhalb der Wartezeit (Standard 45 s, max. 55 s) gilt die Vorgabe |
+| Immer zulassen / ablehnen | sofortige Antwort |
+
+Vorgaben für Dauer, Download/Upload (kbit/s) und Datenvolumen (MB) gelten für jede Freigabe; der Dienst kann sie je Gast
+überschreiben. Ereignisse: `event.netz_unifi_hotspot` (`guest_signed_in`, `personal_password` – ohne Passwort –,
+`verify_request`, `approved`, `denied`, `test`), Bus-Event `unifi_controller_hotspot`, Sensor
+`sensor.netz_unifi_hotspot_wartende_gaste` (Anfragen als Attribut).
+
 ### Regeländerungen
 
 Bei jedem Konfigurationsabruf vergleicht die Integration den Stand mit dem vorherigen und meldet jede Änderung

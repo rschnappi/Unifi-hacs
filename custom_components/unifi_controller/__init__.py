@@ -59,6 +59,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: UniFiConfigEntry) -> boo
     await coordinator.kids.async_setup()
     coordinator.presence = PresenceManager(hass, coordinator)
     await coordinator.presence.async_setup()
+    from .hotspot import Hotspot  # noqa: PLC0415
+
+    coordinator.hotspot = Hotspot(hass, entry, coordinator)
+    await coordinator.hotspot.async_setup()
+    entry.async_on_unload(coordinator.hotspot.async_unload)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     entry.async_on_unload(entry.add_update_listener(_async_reload))

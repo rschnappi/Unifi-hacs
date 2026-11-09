@@ -606,7 +606,26 @@ def async_setup_services(hass: HomeAssistant) -> None:
         c.async_update_listeners()
         return {"zurueckgesetzt": done}
 
+    async def hotspot_decide(call: ServiceCall) -> ServiceResponse:
+        """Wartenden WLAN-Gast (External Authorization) zulassen oder ablehnen."""
+        c = _coordinator(hass, call)
+        who = c.hotspot.decide(call.data.get("request_id"), call.data["approve"], von="Dienst",
+                               minutes=call.data.get("minutes"),
+                               down=call.data.get("rate_limit_down_kbps"),
+                               up=call.data.get("rate_limit_up_kbps"),
+                               data_mb=call.data.get("data_limit_mb"))
+        return {"gast": who, "zugelassen": call.data["approve"]}
+
     reg = hass.services.async_register
+    reg(DOMAIN, "hotspot_decide", hotspot_decide, schema=vol.Schema({
+        **BASE,
+        vol.Optional("request_id"): cv.string,
+        vol.Required("approve"): cv.boolean,
+        vol.Optional("minutes"): vol.All(vol.Coerce(int), vol.Range(min=1, max=43200)),
+        vol.Optional("rate_limit_down_kbps"): vol.All(vol.Coerce(int), vol.Range(min=2, max=100000)),
+        vol.Optional("rate_limit_up_kbps"): vol.All(vol.Coerce(int), vol.Range(min=2, max=100000)),
+        vol.Optional("data_limit_mb"): vol.All(vol.Coerce(int), vol.Range(min=1, max=1048576)),
+    }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "reset_port_errors", reset_port_errors, schema=vol.Schema({
         **BASE,
         vol.Optional("device"): cv.string,

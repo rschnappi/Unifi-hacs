@@ -986,3 +986,43 @@ reset_port_errors:
           min: 1
           max: 128
           mode: box
+hotspot_decide:
+  fields:
+    config_entry_id: *id001
+    request_id:
+      example: 3fa9c21b
+      selector:
+        text: {}
+    approve:
+      required: true
+      default: true
+      selector:
+        boolean: {}
+    minutes:
+      selector:
+        number:
+          min: 1
+          max: 43200
+          mode: box
+          unit_of_measurement: min
+    rate_limit_down_kbps:
+      selector:
+        number:
+          min: 2
+          max: 100000
+          mode: box
+          unit_of_measurement: kbit/s
+    rate_limit_up_kbps:
+      selector:
+        number:
+          min: 2
+          max: 100000
+          mode: box
+          unit_of_measurement: kbit/s
+    data_limit_mb:
+      selector:
+        number:
+          min: 1
+          max: 1048576
+          mode: box
+          unit_of_measurement: MB

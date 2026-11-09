@@ -23,6 +23,9 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
+    NumberSelector,
+    NumberSelectorConfig,
+    NumberSelectorMode,
     SelectOptionDict,
     SelectSelector,
     SelectSelectorConfig,
@@ -82,6 +85,19 @@ from .const import (
     DEFAULT_SCAN_INTERVAL,
     DEFAULT_SITE,
     DOMAIN,
+)
+from .const import (
+    CONF_HS_DATA_MB,
+    CONF_HS_DOWN,
+    CONF_HS_MINUTES,
+    CONF_HS_MODE,
+    CONF_HS_ON_TIMEOUT,
+    CONF_HS_SECRET,
+    CONF_HS_TIMEOUT,
+    CONF_HS_UP,
+    DEFAULT_HS_MODE,
+    DEFAULT_HS_ON_TIMEOUT,
+    DEFAULT_HS_TIMEOUT,
 )
 from .flows import default_kid_networks
 from .kids import (
@@ -640,7 +656,8 @@ class UniFiControllerOptionsFlow(OptionsFlow):
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         return self.async_show_menu(
-            step_id="init", menu_options=["general", "networks", "logs", "region", "notify", "firmware"])
+            step_id="init", menu_options=["general", "networks", "logs", "region", "notify", "firmware",
+                                           "hotspot"])
 
     async def async_step_notify(
         self, user_input: dict[str, Any] | None = None
@@ -659,6 +676,48 @@ class UniFiControllerOptionsFlow(OptionsFlow):
             for cat in NOTIFY_CATEGORIES
         })
         return self.async_show_form(step_id="notify", data_schema=schema)
+
+    async def async_step_hotspot(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Hotspot-Webhooks & External Authorization (Network 11.1.47+)."""
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            secret = (user_input.get(CONF_HS_SECRET) or "").strip()
+            if secret and not secret.startswith("whsec_"):
+                errors[CONF_HS_SECRET] = "invalid_secret"
+            else:
+                return self.async_create_entry(
+                    data={**self.config_entry.options, **user_input, CONF_HS_SECRET: secret})
+        o = self.config_entry.options
+        coordinator = getattr(self.config_entry, "runtime_data", None)
+        url = coordinator.hotspot.url if coordinator and getattr(coordinator, "hotspot", None) else "–"
+
+        def num(key: str, maximum: int, unit: str) -> Any:
+            return vol.Required(key, default=o.get(key, 0)), NumberSelector(NumberSelectorConfig(
+                min=0, max=maximum, step=1, mode=NumberSelectorMode.BOX,
+                unit_of_measurement=unit))
+
+        schema = vol.Schema(dict([
+            (vol.Optional(CONF_HS_SECRET, default=o.get(CONF_HS_SECRET, "")), PASSWORD),
+            (vol.Required(CONF_HS_MODE, default=o.get(CONF_HS_MODE, DEFAULT_HS_MODE)),
+             SelectSelector(SelectSelectorConfig(options=["ask", "allow", "deny", "off"],
+                                                 translation_key="hotspot_mode"))),
+            (vol.Required(CONF_HS_TIMEOUT, default=o.get(CONF_HS_TIMEOUT, DEFAULT_HS_TIMEOUT)),
+             NumberSelector(NumberSelectorConfig(min=10, max=55, step=1,
+                                                 mode=NumberSelectorMode.BOX,
+                                                 unit_of_measurement="s"))),
+            (vol.Required(CONF_HS_ON_TIMEOUT,
+                          default=o.get(CONF_HS_ON_TIMEOUT, DEFAULT_HS_ON_TIMEOUT)),
+             SelectSelector(SelectSelectorConfig(options=["deny", "allow"],
+                                                 translation_key="hotspot_on_timeout"))),
+            num(CONF_HS_MINUTES, 43200, "min"),
+            num(CONF_HS_DOWN, 100000, "kbit/s"),
+            num(CONF_HS_UP, 100000, "kbit/s"),
+            num(CONF_HS_DATA_MB, 1048576, "MB"),
+        ]))
+        return self.async_show_form(step_id="hotspot", data_schema=schema, errors=errors,
+                                    description_placeholders={"url": url})
 
     async def async_step_firmware(
         self, user_input: dict[str, Any] | None = None

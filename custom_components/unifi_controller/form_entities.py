@@ -172,6 +172,52 @@ class DeviceDnsSensor(ControllerEntity, SensorEntity):
         return {"eintraege": device_records(self.coordinator)}
 
 
+class HotspotPendingSensor(ControllerEntity, SensorEntity):
+    """WLAN-Gäste, die auf Freigabe warten (External Authorization)."""
+
+    _attr_icon = "mdi:account-clock"
+    _attr_native_unit_of_measurement = "Gäste"
+
+    def __init__(self, coordinator: UniFiCoordinator) -> None:
+        super().__init__(coordinator, "hotspot_pending", "Hotspot wartende Gäste")
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """HA 2026.11+: Entity-ID direkt umbenennen statt entfernen/neu anlegen."""
+        if parent := getattr(super(), "async_entity_id_changed", None):
+            parent(old_entity_id)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(self.coordinator.hotspot.async_add_listener(
+            lambda *_: self.async_write_ha_state()))
+
+    @property
+    def native_value(self) -> int:
+        return len(self.coordinator.hotspot.pending)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        hs = self.coordinator.hotspot
+        return {"anfragen": [r.as_dict() for r in sorted(hs.pending.values(), key=lambda r: r.created)],
+                "letztes_ereignis": hs.last}
+
+
+class HotspotDecideButton(ControllerEntity, ButtonEntity):
+    """Ältesten wartenden WLAN-Gast zulassen bzw. ablehnen."""
+
+    def __init__(self, coordinator: UniFiCoordinator, approve: bool) -> None:
+        super().__init__(coordinator, f"hotspot_{'allow' if approve else 'deny'}",
+                         f"Hotspot-Gast {'zulassen' if approve else 'ablehnen'}")
+        self._approve = approve
+        self._attr_icon = "mdi:account-check" if approve else "mdi:account-cancel"
+
+    async def async_press(self) -> None:
+        who = self.coordinator.hotspot.decide(None, self._approve, von="Dashboard")
+        self.coordinator.forms_status.report(
+            "Hotspot", f"{who} {'zugelassen' if self._approve else 'abgelehnt'}")
+
+
 def form_entities(coordinator: UniFiCoordinator, platform: str) -> list:
     out: list = []
     for form in coordinator.forms.values():
@@ -186,4 +232,7 @@ def form_entities(coordinator: UniFiCoordinator, platform: str) -> list:
     if platform == "sensor":
         out.append(FormStatusSensor(coordinator))
         out.append(DeviceDnsSensor(coordinator))
+        out.append(HotspotPendingSensor(coordinator))
+    if platform == "button":
+        out.extend([HotspotDecideButton(coordinator, True), HotspotDecideButton(coordinator, False)])
     return out
