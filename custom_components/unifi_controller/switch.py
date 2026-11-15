@@ -293,7 +293,12 @@ async def async_set_app_block(coordinator: UniFiCoordinator, net_id: str, app: s
     name = object_name(net)
     rule = find_app_rule(coordinator, name, app)
     if rule is not None:
-        await coordinator.async_update_object("trafficrules", rule, {"enabled": blocked})
+        changes: dict[str, Any] = {"enabled": blocked}
+        have = {d.get("domain") for d in rule.get("domains") or []}
+        if have != set(APP_DOMAINS[app]):   # Domain-Liste der App erweitert → Regel nachziehen
+            changes["domains"] = [{"domain": d, "port_ranges": [], "ports": []}
+                                  for d in APP_DOMAINS[app]]
+        await coordinator.async_update_object("trafficrules", rule, changes)
         return
     if not blocked:
         return

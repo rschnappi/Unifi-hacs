@@ -25,8 +25,9 @@ APP_POLL_S = 300
 APP_DOMAINS: dict[str, list[str]] = {
     "YouTube": ["youtube.com", "googlevideo.com", "ytimg.com", "youtu.be",
                 "youtube-nocookie.com", "youtubei.googleapis.com"],
-    "TikTok": ["tiktok.com", "tiktokv.com", "tiktokcdn.com", "tiktokcdn-us.com",
-               "byteoversea.com", "ibytedtos.com", "ibyteimg.com", "musical.ly"],
+    "TikTok": ["tiktok.com", "tiktokv.com", "tiktokv.eu", "tiktokcdn.com", "tiktokcdn-us.com",
+               "tiktokcdn-eu.com", "byteoversea.com", "byteoversea.net", "ibytedtos.com",
+               "ibyteimg.com", "musical.ly"],
     "Instagram": ["instagram.com", "cdninstagram.com"],
     "Snapchat": ["snapchat.com", "snapkit.com", "sc-cdn.net", "snap-dev.net",
                  "snapads.com", "feelinsonice-hrd.appspot.com"],
