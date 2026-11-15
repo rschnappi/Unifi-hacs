@@ -414,6 +414,11 @@ Netze unter *Allgemein → Kindernetze* (Standard: Netze der Firewall-Zone „Ki
 - `sensor.netz_unifi_apps_<netz>_heute` – MB heute, Attribut `apps_mb` je App, `top_app`.
   Grundlage sind die Traffic-Flows (Domains), alle 5 min; erkannt: YouTube, TikTok, Instagram,
   Snapchat, WhatsApp, Roblox, Fortnite, Minecraft, Twitch, Discord, Netflix.
+- `sensor.netz_unifi_apps_<netz>_7_tage` / `_30_tage` – dasselbe für die letzten 7 bzw. 30 Tage
+  (inkl. heute), dazu `tage_mit_daten`. Abgeschlossene Tage werden je Netz als Summen gespeichert
+  (31 Tage, übersteht Neustarts); nach einem Neustart wird der laufende Tag ab Mitternacht nachgeladen.
+- Attribut `unbekannte_domains_mb` (alle App-Sensoren) – die häufigsten Domains hinter „Sonstiges“,
+  um fehlende Apps zu finden.
 - `switch.netz_unifi_app_sperre_<netz>_<app>` – sperrt die App im Netz per Traffic-Regel
   „HA App-Sperre <Netz>: <App>“ (Domain-Ziel). YouTube/TikTok/Instagram/Snapchat/Roblox sind
   aktiviert, die übrigen Schalter standardmäßig deaktiviert.
