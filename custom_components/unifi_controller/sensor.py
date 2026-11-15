@@ -227,7 +227,8 @@ async def async_setup_entry(
             yield VpnAccessSensor(coordinator, nid)
         for nid in coordinator.apps.network_ids:
             if nid in data.config.get("networks", {}):
-                yield AppUsageSensor(coordinator, nid)
+                for days in (1, 7, 30):
+                    yield AppUsageSensor(coordinator, nid, days)
         for mac, dev in data.devices.items():
             for t in dev.get("temperatures") or []:
                 if t.get("name"):
@@ -536,26 +537,37 @@ class VpnAccessSensor(ControllerEntity, SensorEntity):
 
 
 class AppUsageSensor(ControllerEntity, SensorEntity):
-    """Datenmenge heute je App in einem (Kinder-)Netz – aus den Traffic-Flows."""
+    """Datenmenge je App in einem (Kinder-)Netz – heute bzw. letzte 7/30 Tage (Traffic-Flows)."""
 
     _attr_icon = "mdi:apps"
     _attr_native_unit_of_measurement = "MB"
-    _attr_state_class = SensorStateClass.TOTAL_INCREASING
 
-    def __init__(self, coordinator: UniFiCoordinator, net_id: str) -> None:
+    def __init__(self, coordinator: UniFiCoordinator, net_id: str, days: int = 1) -> None:
         net = coordinator.data.config["networks"][net_id]
-        super().__init__(coordinator, f"app_usage_{net_id}", f"Apps {object_name(net)} heute")
-        self._id = net_id
+        if days == 1:
+            key, label = f"app_usage_{net_id}", "heute"
+            self._attr_state_class = SensorStateClass.TOTAL_INCREASING
+        else:
+            key, label = f"app_usage_{days}d_{net_id}", f"{days} Tage"
+        super().__init__(coordinator, key, f"Apps {object_name(net)} {label}")
+        self._id, self._days = net_id, days
 
     @property
     def native_value(self) -> float:
-        return round(sum(self.coordinator.apps.usage(self._id).values()), 1)
+        return round(sum(self.coordinator.apps.usage(self._id, self._days).values()), 1)
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
-        use = self.coordinator.apps.usage(self._id)
+        apps = self.coordinator.apps
+        use = apps.usage(self._id, self._days)
         top = next((a for a in use if a != "Sonstiges"), None)
-        return {"top_app": top, "apps_mb": use, "fehler": self.coordinator.apps.error}
+        attrs: dict[str, Any] = {"top_app": top, "apps_mb": use,
+                                 "unbekannte_domains_mb": apps.unknown_domains(self._id, self._days),
+                                 "fehler": apps.error}
+        if self._days > 1:
+            attrs["zeitraum_tage"] = self._days
+            attrs["tage_mit_daten"] = apps.days_with_data(self._id, self._days)
+        return attrs
 
 
 class DeviceTemperature(DeviceEntity, SensorEntity):

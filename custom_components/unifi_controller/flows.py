@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import timedelta
 import logging
 import time
 from typing import TYPE_CHECKING, Any
@@ -151,23 +152,107 @@ def default_kid_networks(coordinator: UniFiCoordinator) -> list[str]:
             if zone_of_network(data, n) in zones]
 
 
+HISTORY_DAYS = 31          # so viele vergangene Tage bleiben gespeichert
+BACKFILL_PAGES = 40        # erster Abruf nach Neustart ohne gespeicherten Tag: ab Mitternacht
+NO_DOMAIN = "(ohne Domain)"
+
+
+def base_domain(domain: str | None) -> str:
+    """Domain auf die letzten beiden Teile kürzen (cdn.example.com → example.com)."""
+    if not domain:
+        return NO_DOMAIN
+    parts = domain.lower().rstrip(".").split(".")
+    return ".".join(parts[-2:]) if len(parts) > 1 else parts[0]
+
+
+def _mb(acc: dict[str, int]) -> dict[str, float]:
+    return {k: round(v / 1_000_000, 1) for k, v in sorted(acc.items(), key=lambda i: -i[1])}
+
+
 class AppUsage:
-    """Zählt Bytes je (Netzwerk, App) pro Tag aus den Flows der gewählten Netze."""
+    """Zählt Bytes je (Netzwerk, App) pro Tag aus den Flows der gewählten Netze.
+
+    Der laufende Tag wird aus den einzelnen Flows gebildet (nach Flow-ID entdoppelt),
+    abgeschlossene Tage werden je Netz als Summen gespeichert (HA-Storage, 31 Tage) –
+    so gibt es neben „heute“ auch 7- und 30-Tage-Werte, auch über Neustarts hinweg.
+    Für „Sonstiges“ wird zusätzlich die Domain mitgezählt (häufigste unerkannte Domains).
+    """
 
     def __init__(self, coordinator: UniFiCoordinator, network_ids: list[str] | None) -> None:
+        from homeassistant.helpers.storage import Store  # noqa: PLC0415
+
+        from .const import DOMAIN  # noqa: PLC0415
+
         self.coordinator = coordinator
         self._configured = network_ids
+        self._store: Store = Store(
+            coordinator.hass, 1, f"{DOMAIN}.{coordinator.config_entry.entry_id}.app_usage")
+        self._loaded = False
         self._last_poll = 0.0
         self._last_ts = int(time.time() * 1000) - APP_POLL_S * 1000
         self._date = dt_util.now().date()
-        self._flow_bytes: dict[str, tuple[str, str, int]] = {}  # flow-id -> (net, app, bytes)
+        # flow-id -> (net, app, bytes, domain)
+        self._flow_bytes: dict[str, tuple[str, str, int, str]] = {}
+        # "YYYY-MM-DD" -> net -> {"apps": {app: bytes}, "unbekannt": {domain: bytes}}
+        self._days: dict[str, dict[str, dict[str, dict[str, int]]]] = {}
         self.error: str | None = None
+
+    # ---- Speichern / Laden -------------------------------------------------------------
+    def _data(self) -> dict[str, Any]:
+        return {"date": self._date.isoformat(), "last_ts": self._last_ts,
+                "flows": {k: list(v) for k, v in self._flow_bytes.items()},
+                "days": self._days}
+
+    async def _async_load(self) -> None:
+        self._loaded = True
+        data = await self._store.async_load() or {}
+        self._days = data.get("days") or {}
+        today = dt_util.now().date()
+        if data.get("date") == today.isoformat():
+            self._flow_bytes = {k: tuple(v) for k, v in (data.get("flows") or {}).items()
+                                if isinstance(v, list) and len(v) == 4}
+            self._last_ts = int(data.get("last_ts") or self._last_ts)
+        else:
+            if data.get("date") and data.get("flows"):   # gespeicherter Vortag → abschließen
+                self._date = dt_util.parse_date(data["date"]) or today
+                self._flow_bytes = {k: tuple(v) for k, v in data["flows"].items()
+                                    if isinstance(v, list) and len(v) == 4}
+                self._close_day()
+            self._date = today
+            self._flow_bytes = {}
+            self._last_ts = int(dt_util.start_of_local_day().timestamp() * 1000)
+        self._prune()
+
+    def _save(self) -> None:
+        self._store.async_delay_save(self._data, 30)
+
+    # ---- Tageswechsel ------------------------------------------------------------------
+    def _totals(self) -> dict[str, dict[str, dict[str, int]]]:
+        out: dict[str, dict[str, dict[str, int]]] = {}
+        for net, app, b, dom in self._flow_bytes.values():
+            n = out.setdefault(net, {"apps": defaultdict(int), "unbekannt": defaultdict(int)})
+            n["apps"][app] += b
+            if app == "Sonstiges":
+                n["unbekannt"][dom] += b
+        return {net: {k: dict(v) for k, v in d.items()} for net, d in out.items()}
+
+    def _close_day(self) -> None:
+        if self._flow_bytes:
+            self._days[self._date.isoformat()] = self._totals()
+
+    def _prune(self) -> None:
+        oldest = (dt_util.now().date() - timedelta(days=HISTORY_DAYS)).isoformat()
+        for d in [d for d in self._days if d < oldest]:
+            del self._days[d]
 
     def _roll(self) -> None:
         today = dt_util.now().date()
         if today != self._date:
+            self._close_day()
             self._date = today
             self._flow_bytes.clear()
+            self._prune()
+            self._save()
 
     @property
     def network_ids(self) -> set[str]:
@@ -178,11 +263,16 @@ class AppUsage:
     async def async_poll(self) -> None:
         if not self.network_ids or time.monotonic() - self._last_poll < APP_POLL_S:
             return
+        backfill = not self._loaded
+        if not self._loaded:
+            await self._async_load()
         self._last_poll = time.monotonic()
         self._roll()
         now = int(time.time() * 1000)
         try:
-            flows = await async_fetch_flows(self.coordinator, self._last_ts - 60_000, now)
+            flows = await async_fetch_flows(
+                self.coordinator, self._last_ts - 60_000, now,
+                max_pages=BACKFILL_PAGES if backfill else MAX_PAGES)
             self.error = None
         except UniFiApiError as err:
             if self.error != str(err):
@@ -190,23 +280,48 @@ class AppUsage:
             self.error = str(err)
             return
         self._last_ts = now
+        day_start = int(dt_util.start_of_local_day().timestamp() * 1000)
         for f in flows:
             net = (f.get("source") or {}).get("network_id")
-            if net not in self.network_ids:
+            if net not in self.network_ids or (f.get("time") or now) < day_start:
                 continue
             app = flow_app(f) or "Sonstiges"
+            dom = base_domain(((f.get("destination") or {}).get("domains") or [None])[0])
             b = int((f.get("traffic_data") or {}).get("bytes_total") or 0)
             fid = f.get("id") or f"{f.get('time')}-{id(f)}"
             prev = self._flow_bytes.get(fid)
             if prev is None or b > prev[2]:
-                self._flow_bytes[fid] = (net, app, b)
+                self._flow_bytes[fid] = (net, app, b, dom)
+        self._save()
 
-    def usage(self, network_id: str) -> dict[str, float]:
-        """App -> MB heute für ein Netz (absteigend)."""
+    # ---- Auswertung --------------------------------------------------------------------
+    def _collect(self, network_id: str, days: int, key: str) -> dict[str, int]:
         self._roll()
         acc: dict[str, int] = defaultdict(int)
-        for net, app, b in self._flow_bytes.values():
+        for net, app, b, dom in self._flow_bytes.values():
             if net == network_id:
-                acc[app] += b
-        return {a: round(v / 1_000_000, 1)
-                for a, v in sorted(acc.items(), key=lambda i: -i[1])}
+                if key == "apps":
+                    acc[app] += b
+                elif app == "Sonstiges":
+                    acc[dom] += b
+        if days > 1:
+            first = (self._date - timedelta(days=days - 1)).isoformat()
+            for d, nets in self._days.items():
+                if d >= first:
+                    for k, v in ((nets.get(network_id) or {}).get(key) or {}).items():
+                        acc[k] += int(v)
+        return acc
+
+    def usage(self, network_id: str, days: int = 1) -> dict[str, float]:
+        """App -> MB für ein Netz: heute (days=1) bzw. die letzten N Tage inkl. heute."""
+        return _mb(self._collect(network_id, days, "apps"))
+
+    def unknown_domains(self, network_id: str, days: int = 1, top: int = 15) -> dict[str, float]:
+        """Häufigste Domains hinter „Sonstiges“ (MB), damit die App-Liste ergänzt werden kann."""
+        return dict(list(_mb(self._collect(network_id, days, "unbekannt")).items())[:top])
+
+    def days_with_data(self, network_id: str, days: int) -> int:
+        first = (self._date - timedelta(days=days - 1)).isoformat()
+        past = sum(1 for d, nets in self._days.items() if d >= first and network_id in nets)
+        today = any(v[0] == network_id for v in self._flow_bytes.values())
+        return past + int(today)
