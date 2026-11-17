@@ -613,7 +613,8 @@ def async_setup_services(hass: HomeAssistant) -> None:
                                minutes=call.data.get("minutes"),
                                down=call.data.get("rate_limit_down_kbps"),
                                up=call.data.get("rate_limit_up_kbps"),
-                               data_mb=call.data.get("data_limit_mb"))
+                               data_mb=call.data.get("data_limit_mb"),
+                               vlan=call.data.get("personal_wifi_vlan"))
         return {"gast": who, "zugelassen": call.data["approve"]}
 
     reg = hass.services.async_register
@@ -625,6 +626,7 @@ def async_setup_services(hass: HomeAssistant) -> None:
         vol.Optional("rate_limit_down_kbps"): vol.All(vol.Coerce(int), vol.Range(min=2, max=100000)),
         vol.Optional("rate_limit_up_kbps"): vol.All(vol.Coerce(int), vol.Range(min=2, max=100000)),
         vol.Optional("data_limit_mb"): vol.All(vol.Coerce(int), vol.Range(min=1, max=1048576)),
+        vol.Optional("personal_wifi_vlan"): vol.All(vol.Coerce(int), vol.Range(min=1, max=4094)),
     }), supports_response=SupportsResponse.OPTIONAL)
     reg(DOMAIN, "reset_port_errors", reset_port_errors, schema=vol.Schema({
         **BASE,

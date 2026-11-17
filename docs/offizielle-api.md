@@ -1,7 +1,7 @@
 # Offizielle UniFi Network API
 
 Ab Network 9 hat UniFi eine offizielle, dokumentierte API (`/proxy/network/integration/v1`).
-Geprüft gegen **UniFi Network API 11.1.47** (Endpunkte identisch mit 11.0.99/11.0.97/11.0.94; neu ist nur die Doku der ausgehenden Hotspot-Webhooks, siehe unten; gegenüber 11.0.89: gleiche 72 Endpunkte, gleiche Geräte-/Port-/Client-Aktionen, alle genutzten Felder unverändert). Die Integration nutzt sie zusätzlich zur internen
+Geprüft gegen **UniFi Network API 11.1.50** (Endpunkte identisch mit 11.1.47/11.0.99/11.0.97/11.0.94; neu seit 11.1.47 ist nur die Doku der ausgehenden Hotspot-Webhooks, siehe unten; gegenüber 11.0.89: gleiche 72 Endpunkte, gleiche Geräte-/Port-/Client-Aktionen, alle genutzten Felder unverändert). Die Integration nutzt sie zusätzlich zur internen
 Legacy-/v2-API, und zwar dort, wo sie mehr kann. Ohne diese API (ältere Controller) läuft alles
 wie bisher weiter.
 
@@ -62,7 +62,7 @@ Kinderprofil-Netze (das offizielle Anlage-Schema für Gateway-Netze ist nicht do
 
 ## Was intern bleiben muss
 
-Für folgende Bereiche hat die offizielle API (11.1.47) keine Endpunkte: Traffic-Regeln und
+Für folgende Bereiche hat die offizielle API (11.1.50) keine Endpunkte: Traffic-Regeln und
 -Routen (App-Sperren), Portweiterleitungen, statische Routen, QoS, Port-Profile, bekannte
 Clients (Netz-Zuordnung, Sperren), WireGuard-Zugänge, System-Log, Flows, Speedtest, Backups,
 LED/Locate und die Live-Statistik (Signal, AP, Temperaturen, Portfehler, Durchsatz).
@@ -74,4 +74,9 @@ Keine neuen Endpunkte, sondern Aufrufe, die die Konsole an eine eigene HTTPS-URL
 (enthält das Passwort), `test`, sowie **External Authorization** `guest.verify` – die Konsole fragt, ob ein Gast
 online darf; Antwort `{"approved": true|false, "expires_at"?, "rate_limit_up_kbps"?, "rate_limit_down_kbps"?,
 "data_limit_mb"?}` innerhalb des Timeouts (Standard 60 s). Signatur: Header `X-UniFi-Signature: t=…,v1=…` =
-HMAC-SHA256(secret, "t.body"), bei External Authorization immer gesetzt. Von der Integration noch nicht genutzt.
+HMAC-SHA256(secret, "t.body"), bei External Authorization immer gesetzt. Genutzt ab v0.32.0 (`hotspot.py`).
+
+**11.1.50:** `personal_wifi_password.created` hat `chosen_by_guest` (dann ohne Passwort); die Freigabe-Antwort kann
+`personal_wifi_vlan` (1–4094) setzen – nur das VLAN des Personal-WiFi-Netzes oder eines Netzes auf dessen PPSK-Liste
+wirkt, sonst gilt das normale Personal-WiFi-Netz. Option *VLAN fürs persönliche WLAN-Passwort* bzw. Dienstfeld
+`personal_wifi_vlan`.

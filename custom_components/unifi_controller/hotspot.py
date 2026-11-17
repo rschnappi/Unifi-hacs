@@ -43,6 +43,7 @@ from .const import (
     CONF_HS_SECRET,
     CONF_HS_TIMEOUT,
     CONF_HS_UP,
+    CONF_HS_VLAN,
     CONF_HS_WEBHOOK_ID,
     DEFAULT_HS_MODE,
     DEFAULT_HS_ON_TIMEOUT,
@@ -103,7 +104,7 @@ def verify_signature(secret: str, raw: bytes, header: str | None, now: float | N
     return hmac.compare_digest(expected, parts.get("v1", ""))
 
 
-def approval(minutes: int = 0, down: int = 0, up: int = 0, data_mb: int = 0,
+def approval(minutes: int = 0, down: int = 0, up: int = 0, data_mb: int = 0, vlan: int = 0,
              now: float | None = None) -> dict[str, Any]:
     """Antwort für eine Freigabe; Grenzen wie in der API (sonst wertet die Konsole als Ablehnung)."""
     out: dict[str, Any] = {"approved": True}
@@ -115,6 +116,8 @@ def approval(minutes: int = 0, down: int = 0, up: int = 0, data_mb: int = 0,
         out["rate_limit_up_kbps"] = max(2, min(int(up), 100000))
     if data_mb:
         out["data_limit_mb"] = max(1, min(int(data_mb), 1048576))
+    if vlan and 1 <= int(vlan) <= 4094:   # ab 11.1.50: VLAN für das persönliche WLAN-Passwort
+        out["personal_wifi_vlan"] = int(vlan)
     return out
 
 
@@ -211,6 +214,7 @@ class Hotspot:
         elif event == "personal_wifi_password.created":
             self._emit("personal_password", {   # Passwort bewusst NICHT übernehmen
                 "mac": guest.get("mac"), "email": guest.get("email"), "ssid": body.get("ssid"),
+                "selbst_gewaehlt": bool(body.get("chosen_by_guest")),   # ab 11.1.50
                 "bis": _ts(body.get("expires_at"))})
         elif event == "test":
             self._emit("test", {"signiert": signed})
@@ -231,7 +235,8 @@ class Hotspot:
         return {"minutes": int(self.opt(CONF_HS_MINUTES, 0) or 0),
                 "down": int(self.opt(CONF_HS_DOWN, 0) or 0),
                 "up": int(self.opt(CONF_HS_UP, 0) or 0),
-                "data_mb": int(self.opt(CONF_HS_DATA_MB, 0) or 0)}
+                "data_mb": int(self.opt(CONF_HS_DATA_MB, 0) or 0),
+                "vlan": int(self.opt(CONF_HS_VLAN, 0) or 0)}
 
     async def _verify(self, body: dict[str, Any]) -> dict[str, Any]:
         mode = self.opt(CONF_HS_MODE, DEFAULT_HS_MODE)
@@ -262,7 +267,7 @@ class Hotspot:
         if decision.get("approved"):
             self._emit("approved", {**info, "grund": decision.get("von", "manuell")})
             return approval(**{**self._limits(), **{k: v for k, v in decision.items()
-                                                    if k in ("minutes", "down", "up", "data_mb")
+                                                    if k in ("minutes", "down", "up", "data_mb", "vlan")
                                                     and v is not None}})
         self._emit("denied", {**info, "grund": decision.get("von", "manuell")})
         return {"approved": False}
@@ -295,7 +300,7 @@ class Hotspot:
     @callback
     def decide(self, rid: str | None, approve: bool, *, von: str = "manuell",
                minutes: int | None = None, down: int | None = None, up: int | None = None,
-               data_mb: int | None = None) -> str:
+               data_mb: int | None = None, vlan: int | None = None) -> str:
         if not self.pending:
             raise ServiceValidationError("Kein WLAN-Gast wartet gerade auf Freigabe")
         if rid is None:
@@ -305,7 +310,7 @@ class Hotspot:
             raise ServiceValidationError(f"Anfrage {rid} gibt es nicht (mehr)")
         if not req.future.done():
             req.future.set_result({"approved": approve, "von": von, "minutes": minutes,
-                                   "down": down, "up": up, "data_mb": data_mb})
+                                   "down": down, "up": up, "data_mb": data_mb, "vlan": vlan})
         return req.label()
 
 

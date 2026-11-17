@@ -96,6 +96,7 @@ CONF_HS_MINUTES = "hotspot_minutes"
 CONF_HS_DOWN = "hotspot_down_kbps"
 CONF_HS_UP = "hotspot_up_kbps"
 CONF_HS_DATA_MB = "hotspot_data_mb"
+CONF_HS_VLAN = "hotspot_personal_vlan"
 DEFAULT_HS_MODE = "ask"
 DEFAULT_HS_TIMEOUT = 45
 DEFAULT_HS_ON_TIMEOUT = "deny"
