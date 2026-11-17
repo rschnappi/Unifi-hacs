@@ -95,6 +95,7 @@ from .const import (
     CONF_HS_SECRET,
     CONF_HS_TIMEOUT,
     CONF_HS_UP,
+    CONF_HS_VLAN,
     DEFAULT_HS_MODE,
     DEFAULT_HS_ON_TIMEOUT,
     DEFAULT_HS_TIMEOUT,
@@ -715,6 +716,7 @@ class UniFiControllerOptionsFlow(OptionsFlow):
             num(CONF_HS_DOWN, 100000, "kbit/s"),
             num(CONF_HS_UP, 100000, "kbit/s"),
             num(CONF_HS_DATA_MB, 1048576, "MB"),
+            num(CONF_HS_VLAN, 4094, "VLAN"),
         ]))
         return self.async_show_form(step_id="hotspot", data_schema=schema, errors=errors,
                                     description_placeholders={"url": url})
